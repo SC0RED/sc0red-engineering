@@ -36,7 +36,7 @@ no-symlinks:
 #   make deploy-all              # every agent to its box (use this)
 #   make deploy-all DRY_RUN=1    # preview every agent, no writes
 #   make deploy AGENT=patch      # one agent; host resolved from the map
-#   make deploy AGENT=builder HOST=winston-agent   # explicit host override
+#   make deploy AGENT=patch HOST=clawndom          # explicit host override
 #   make deploy-shared HOST=clawndom               # just the sibling shared dir
 #
 # The fleet's knowledge of WHICH AGENT LIVES WHERE belongs here, not in an
@@ -44,10 +44,9 @@ no-symlinks:
 # agent: drop its workspace under workspaces/, add it to AGENTS, map it
 # to a host below, and (if it references `{{system-doc:shared/...}}`)
 # include it in AGENTS_USE_SHARED. `make deploy-all` carries it automatically.
-AGENTS := patch scarlett builder
+AGENTS := patch scarlett
 HOST_patch    := clawndom
 HOST_scarlett := clawndom
-HOST_builder  := winston-agent
 
 # Agents whose templates reference shared docs (`{{system-doc:shared/X}}`).
 # Each such agent's `agency.yaml` MUST declare `systemDocRoots: [../shared]`

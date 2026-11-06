@@ -338,7 +338,7 @@ If the command fails on code you didn't touch, **that's still our problem.** Fil
 | `production` | Production | Release branch, Production-Approver-only merge |
 
 - Feature/fix branches: `fix/<jira-key>-<short-slug>` off `development`
-- Hotfix branches: `fix/<jira-key>-<slug>` **rebased onto `production`**, with back-merge PRs to testing and development
+- Hotfix branches: `hotfix/<jira-key>-<slug>` off **`production`**, PR targets `production`, with back-merge PRs to testing and development (see [Hotfix Flow](#hotfix-flow))
 - No direct commits to `testing` or `production` - always via PR
 
 ---
