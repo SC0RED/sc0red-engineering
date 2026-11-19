@@ -16,11 +16,11 @@ Neither knows what this team's design promises, so this checks that:
   tools, so no LLM run is ever queued for it, and the board check runs
   board.sweep every two minutes;
 - the runner per agent (Patch claude-cli, Scarlett codex);
-- MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 1) agrees with
-  boards.yaml's run slots;
-- every column in boards.yaml dispatches a stage that has a rule, and no
-  column has an agent claim a card into Ready for Development (the owner's
-  move) or claim anything out of Plan Review;
+- MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 1) agrees with each
+  swept board's run slots;
+- every column a board sweep dispatches maps to a stage that has a rule, and
+  Ready for Development is never a stage column (the owner moves cards there;
+  the sweep only claims them out of it);
 - every template exists and opens with an `## Intent` block, and (with
   --shared) every {{system-doc:...}} directive resolves against the
   workspace or the engineering-standards shared/ directory.
@@ -49,12 +49,12 @@ SWEEP = "agency_tools.board.sweep"
 # The pinned allowlist per (agent, stage). Changing a stage's authority means
 # changing this table in the same PR, where review sees it.
 ALLOWLIST = {
-    ("patch", "plan"): {"read", "comment", "submit_plan", "propose_split", "block"},
-    ("patch", "build"): {"read", "comment", "open_for_review", "block"},
+    ("patch", "plan"): {"read", "submit_plan", "propose_split", "block"},
+    ("patch", "build"): {"read", "open_for_review", "block"},
     ("patch", "code-review"): {"read", "comment", "merged", "block"},
     ("patch", "hotfix"): {"read", "comment", "open_for_review", "block"},
     ("scarlett", "plan-review"): {"read", "post_verdict", "block"},
-    ("scarlett", "code-review"): {"read", "comment", "block"},
+    ("scarlett", "code-review"): {"comment", "block"},
 }
 
 RUNNER = {"patch": "claude-cli", "scarlett": "codex"}
@@ -192,28 +192,39 @@ def check_agent(agent, ws, shared, findings):
     return stages
 
 
+def sweep_boards(root):
+    """The `board` argument of every board.sweep step in Patch's schedule."""
+    config = yaml.safe_load(open(os.path.join(root, "workspaces", "patch", "agency.yaml"), encoding="utf-8")) or {}
+    boards = []
+    for rule in ((config.get("routing") or {}).get("schedule") or {}).get("rules") or []:
+        for step in rule.get("preRun") or []:
+            if step.get("tool") == SWEEP:
+                boards.append((step.get("name", "?"), (step.get("args") or {}).get("board") or {}))
+    return boards
+
+
 def check_boards(root, stages_by_agent, findings):
-    path = os.path.join(root, "workspaces", "patch", "boards.yaml")
-    if not os.path.isfile(path):
-        findings.append(f"boards: {path} missing")
-        return
-    boards = yaml.safe_load(open(path, encoding="utf-8")) or {}
-    for agent, expected in CONCURRENCY.items():
-        slots = ((boards.get("agents") or {}).get(agent) or {}).get("runSlots")
-        if slots != expected:
-            findings.append(f"boards: agents.{agent}.runSlots is {slots!r}, expected {expected} (agent.env)")
-    for board in boards.get("boards") or []:
-        name = board.get("name", "?")
-        for column, entries in (board.get("columns") or {}).items():
+    boards = sweep_boards(root)
+    if not boards:
+        findings.append("boards: no board.sweep step sweeps any board")
+    for name, board in boards:
+        if not re.fullmatch(r"[A-Za-z0-9-]+/[0-9]+", str(board.get("project", ""))):
+            findings.append(f"boards/{name}: project must be 'owner/number', got {board.get('project')!r}")
+        if not board.get("repos"):
+            findings.append(f"boards/{name}: lists no repos")
+        if not board.get("notify"):
+            findings.append(f"boards/{name}: no notify login, so a block would mention nobody")
+        for agent, expected in CONCURRENCY.items():
+            slots = (board.get("slots") or {}).get(agent)
+            if slots != expected:
+                findings.append(f"boards/{name}: slots.{agent} is {slots!r}, expected {expected} (agent.env)")
+        for column, entries in (board.get("stages") or {}).items():
+            if column in OWNER_COLUMNS:
+                findings.append(f"boards/{name}: {column} is the owner's move, never a stage column")
             for entry in entries if isinstance(entries, list) else [entries]:
-                agent, stage = entry.get("agent"), entry.get("stage")
+                agent, stage = entry.get("agent"), entry.get("task_type")
                 if stage not in stages_by_agent.get(agent, set()):
                     findings.append(f"boards/{name}/{column}: {agent} has no rule for stage {stage!r}")
-                claim = entry.get("claim")
-                if claim in OWNER_COLUMNS:
-                    findings.append(f"boards/{name}/{column}: claims into {claim}, which only the owner moves to")
-                if claim and column == "Plan Review":
-                    findings.append(f"boards/{name}/Plan Review: no agent claims a card out of Plan Review")
 
 
 def run(root, shared):
@@ -285,13 +296,20 @@ def self_test(repo_root):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
         root = os.path.join(scratch, "owner-column")
         shutil.copytree(base, root)
-        boards_path = os.path.join(root, "workspaces", "patch", "boards.yaml")
-        boards = yaml.safe_load(open(boards_path, encoding="utf-8"))
-        boards["boards"][0]["columns"]["Plan Review"]["claim"] = "Ready for Development"
-        _write(boards_path, yaml.safe_dump(boards, sort_keys=False))
+
+        def owner_column(config):
+            board = config["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
+            board["stages"]["Ready for Development"] = {"agent": "patch", "task_type": "build"}
+        _mutate(root, "patch", owner_column)
         found = run(root, None)
-        if not any("only the owner moves to" in f for f in found):
-            failures.append(f"owner-column: claim into Ready for Development not flagged: {found}")
+        if not any("owner's move" in f for f in found):
+            failures.append(f"owner-column: Ready for Development as a stage column not flagged: {found}")
+        root = os.path.join(scratch, "slots")
+        shutil.copytree(base, root)
+        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
+                ["slots"].__setitem__("scarlett", 3))
+        if not any("slots.scarlett" in f for f in run(root, None)):
+            failures.append("slots: a board's run slots disagreeing with agent.env not flagged")
         root = os.path.join(scratch, "intent")
         shutil.copytree(base, root)
         _write(os.path.join(root, "workspaces", "scarlett", "templates", "plan-review.md"), "no intent\n")

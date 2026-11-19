@@ -9,9 +9,9 @@
 
 | Field | Value |
 | --- | --- |
-| Board | {{ board | default("") }} |
-| Repo | {{ repo | default("") }} (trunk `{{ trunk | default("") }}`) |
-| Issue | #{{ issue_number | default("") }}: {{ issue_url | default("") }} |
+| Board | {{ project | default("") }} |
+| Repo | {{ repo | default("") }} |
+| Issue | #{{ issue | default("") }} |
 | Column | {{ column | default("") }} |
 | Attempt | {{ attempt | default(1) }} |
 
@@ -45,7 +45,7 @@ Judge against the review core's axes and verdict shape, the constitution, and th
 
 ## 1. Read
 
-Call `board.read` with `repo` and `issue_number`. Review the plan comment as it is now. If the owner edited it, review the edit. If `board.read` shows no plan comment, call `board.block` naming that and stop.
+Call `board.read` with `project`, `repo` and `issue` for the card's fields, and read the issue and Patch's plan comment with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. Review the plan comment as it is now. If the owner edited it, review the edit. If there is no plan comment, call `board.block` naming that and stop.
 
 ## 2. Check it against the code
 
@@ -57,7 +57,7 @@ Read the code the plan names, at the trunk's head, read-only (`gh`, or a read-on
 
 ## 3. Verdict
 
-Call `board.post_verdict` with `repo`, `issue_number`, `verdict` and `body`. The body is the review core's verdict shape: for `approve`, what passed on each axis, specifically; for `changes_requested`, one bullet per must-fix. A concern outside this plan's gate becomes a follow-up issue (`gh issue create`), linked in a closing line, not a bullet.
+Call `board.post_verdict` with `project`, `repo`, `issue`, `verdict` and `body`. The body is the review core's verdict shape: for `approve`, what passed on each axis, specifically; for `changes_requested`, one bullet per must-fix. A concern outside this plan's gate becomes a follow-up issue (`gh issue create`), linked in a closing line, not a bullet.
 
 `board.post_verdict` writes or updates your one verdict comment and makes the move: `approve` leaves the card in Plan Review for the owner; a first `changes_requested` sends it back to Patch in Plan; a second one blocks it. Your body for a second round therefore states the disagreement plainly for the owner.
 

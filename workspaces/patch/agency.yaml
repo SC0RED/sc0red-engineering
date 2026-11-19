@@ -1,5 +1,5 @@
 # Patch: the author. Plans, builds, fixes and merges the cards on the GitHub
-# Project boards listed in boards.yaml.
+# Project boards named in the board-check rule below.
 #
 # How work reaches Patch: the `board-check` schedule rule below runs
 # agency_tools.board.sweep every two minutes and then stops, so no LLM run
@@ -51,11 +51,35 @@ routing:
           - module.python: agency_tools.board.sweep
           - module.python: agency_tools.predicate.always_stop
         preRun:
-          - name: sweep
+          # One sweep step per live board. The board config lives here and
+          # nowhere else: its project, the repos it covers, which agent and
+          # stage each column dispatches, run slots (which must equal
+          # MAX_CONCURRENT_RUNS in each agent.env), and who a block mentions.
+          # Ready for Development is not a stage column: the owner moves cards
+          # there and the sweep claims them into In Development.
+          # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
+          # joins with its own step after NeuroBloom has run end to end.
+          - name: sweepNeurobloom
             tool: agency_tools.board.sweep
             args:
-              agent: patch
-              config: boards.yaml
+              board:
+                project: neurobloom-lilly/2
+                repos:
+                  - neurobloom-lilly/neurobloom-app
+                  - neurobloom-lilly/neurobloom-backend
+                  - neurobloom-lilly/neurobloom-infra
+                  - neurobloom-lilly/neurobloom-mcp
+                  - neurobloom-lilly/neurobloom-website
+                stages:
+                  Planning: { agent: patch, task_type: plan }
+                  Plan Review: { agent: scarlett, task_type: plan-review }
+                  In Development: { agent: patch, task_type: build }
+                  Code Review:
+                    - { agent: scarlett, task_type: code-review }
+                    - { agent: patch, task_type: code-review }
+                  Hotfix: { agent: patch, task_type: hotfix }
+                slots: { patch: 2, scarlett: 1 }
+                notify: ctcreel
           - name: stop
             tool: agency_tools.predicate.always_stop
             args:
@@ -77,7 +101,6 @@ routing:
           soul: true
         tools:
           - module.python: agency_tools.board.read
-          - module.python: agency_tools.board.comment
           - module.python: agency_tools.board.submit_plan
           - module.python: agency_tools.board.propose_split
           - module.python: agency_tools.board.block
@@ -96,7 +119,6 @@ routing:
           soul: true
         tools:
           - module.python: agency_tools.board.read
-          - module.python: agency_tools.board.comment
           - module.python: agency_tools.board.open_for_review
           - module.python: agency_tools.board.block
 

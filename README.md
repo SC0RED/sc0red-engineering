@@ -30,7 +30,7 @@ The full design is in `ENGINEERING_TEAM_DESIGN.md` (the lead's copy, beside this
 - `workspaces/<agent>/templates/`: one prompt per stage. Each opens with `## Intent` and cites engineering-standards rather than restating it.
 - `workspaces/<agent>/identity/`: SOUL and IDENTITY.
 - `workspaces/<agent>/agent.env`: daemon settings the launchd job loads (`MAX_CONCURRENT_RUNS`: Patch 2, Scarlett 1).
-- `workspaces/patch/boards.yaml`: the boards, their repos and trunks, and which column belongs to which agent and stage. The board tools read it.
+- The `board-check` rule in `workspaces/patch/agency.yaml` holds each board's config (project, repos, which column dispatches which agent and stage, run slots, who a block mentions) as the `board.sweep` argument. The sweep dispatches each stage with context `{project, repo, issue, column, attempt}`.
 
 Shared discipline (the constitution, engineering loop, shipping, review core, issue guides) is not copied here. engineering-standards stamps its `shared/` directory beside the workspaces, and `systemDocRoots: [../shared]` resolves `{{system-doc:...}}` against it.
 

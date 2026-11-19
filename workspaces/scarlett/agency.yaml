@@ -61,6 +61,5 @@ routing:
         identity:
           soul: true
         tools:
-          - module.python: agency_tools.board.read
           - module.python: agency_tools.board.comment
           - module.python: agency_tools.board.block

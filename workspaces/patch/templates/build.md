@@ -9,11 +9,13 @@
 
 | Field | Value |
 | --- | --- |
-| Board | {{ board | default("") }} |
-| Repo | {{ repo | default("") }} (trunk `{{ trunk | default("") }}`) |
-| Issue | #{{ issue_number | default("") }}: {{ issue_url | default("") }} |
+| Board | {{ project | default("") }} |
+| Repo | {{ repo | default("") }} |
+| Issue | #{{ issue | default("") }} |
 | Column | {{ column | default("") }} |
 | Attempt | {{ attempt | default(1) }} |
+
+`<trunk>` below is the repo's default branch: `gh repo view {{ repo | default("") }} --json defaultBranchRef -q .defaultBranchRef.name`.
 
 The owner moved this card to Ready for Development, which approved the plan on the issue. The board check claimed the card and moved it to In Development. You are Patch, and this run is the build stage.
 
@@ -47,11 +49,11 @@ This run covers the Editor and Verify beats of the engineering loop, and shippin
 
 ## 1. Read where things stand
 
-Call `board.read` with `repo` and `issue_number` for the issue, the approved plan, its fields and any branch or PR already linked. On a rerun, continue the existing branch and PR. Never open a second PR for the card.
+Call `board.read` with `project`, `repo` and `issue` for the card's fields, and read the issue, the approved plan comment and any linked branch or PR with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. On a rerun, continue the existing branch and PR. Never open a second PR for the card.
 
 ## 2. Worktree
 
-Work in `/Volumes/SSD/Code/Github/sc0red/patch-runs/<repo-name>-<issue_number>`: a worktree, or a clone if none exists, on branch `patch/<issue_number>-<short-slug>` off `origin/{{ trunk | default("") }}`. Never use `/tmp` or the boot disk. A build that needs a database gets a fresh Docker Postgres that you remove afterwards.
+Work in `/Volumes/SSD/Code/Github/sc0red/patch-runs/<repo-name>-{{ issue | default("") }}`: a worktree, or a clone if none exists, on branch `patch/{{ issue | default("") }}-<short-slug>` off `origin/<trunk>`. Never use `/tmp` or the boot disk. A build that needs a database gets a fresh Docker Postgres that you remove afterwards.
 
 ## 3. Build exactly the plan
 
@@ -67,9 +69,9 @@ If the plan turns out to be wrong mid-build, stop, and don't improvise. Call `bo
 
 ## 5. Open the PR
 
-Push, then `gh pr create` against `{{ trunk | default("") }}`. The gate checks the records. The PR body follows shipping.md and writing-great-prs.md and contains `Refs #{{ issue_number | default("") }}`. If the gate refuses, read why and fix the cause. Never work around it.
+Push, then `gh pr create` against the trunk. The gate checks the records. The PR body follows shipping.md and writing-great-prs.md and contains `Refs #{{ issue | default("") }}`. If the gate refuses, read why and fix the cause. Never work around it.
 
-Then call `board.open_for_review` with `repo`, `issue_number` and `pr_number`. It moves the card to Code Review. That is the end of the run.
+Then call `board.open_for_review` with `project`, `repo`, `issue` and `pull_number`. It moves the card to Code Review. That is the end of the run.
 
 # Limits
 
