@@ -50,11 +50,12 @@ Use `/Volumes/SSD/Code/Github/sc0red/scarlett-runs/<repo-name>-<pr>`, a clone th
 
 - **CI:** wait for the required checks on the head to finish (`gh pr checks <pr> --repo {{ repo | default("") }} --required --watch`), then confirm every one is success on `headRefOid`. CI runs the repo's bare `make` on every PR; a failed required check is a finding, with its name and the failing step from `gh run view <run id> --repo {{ repo | default("") }} --log-failed`.
 - **Diff:** read `git diff origin/<base>...<headRefOid>` against the review core and the plan.
-- **Astra:** `~/.claude/hooks/astra-verify --context <file>`, where the file holds the approved plan from the issue (or, for a hotfix, the issue's defect) and the PR body. Astra reviews in its own read-only sandbox. Read the verdict against the review core.
+- **Astra:** `~/.claude/hooks/astra-verify --base <base> --context <file>` (`<base>` is the PR's `baseRefName`: `production` for a hotfix fix), where the file holds the approved plan from the issue (or, for a hotfix, the issue's defect) and the PR body. Astra reviews in its own read-only sandbox. Read the verdict against the review core.
 
 ## 4. Verdict
 
 - **CI green and Astra "merge":** run `~/.claude/hooks/scarlett-review {{ repo | default("") }} <pr>` from the checkout. It checks the PR's current head and base against GitHub's CI results and your Astra record, and posts `scarlett/review/<base>` as the sc0red-scarlett App. If it refuses (the head or base moved), stop. The board check sends you the new head.
-- **Astra "do not merge," or a required check failed:** post no status. Call `board_block` with `project`, `repo`, `issue`, `reason` (each must-fix finding, citing the constitution section, and the head you reviewed) and, for a failed check, `log_tail`. Patch already had Astra say "merge" on this change before the PR opened, so a "do not merge" on the same work is a disagreement for the owner to settle, not another round.
+- **A required check failed (Astra aside):** post no status and no block. Comment once on the PR naming the failed check, its failing step and the head (`gh pr comment <pr> --repo {{ repo | default("") }}`), and end the run. Patch's code-review turn fixes CI in the same PR, and the new head comes back to you.
+- **Astra "do not merge":** post no status. Call `board_block` with `project`, `repo`, `issue` and `reason` (each must-fix finding, citing the constitution section, and the head you reviewed). Patch already had Astra say "merge" on this change before the PR opened, so a "do not merge" on the same work is a disagreement for the owner to settle, not another round.
 
 Never post a status any other way, never review a head you didn't read, never run the PR's code, and never edit code. That is the end of the run.

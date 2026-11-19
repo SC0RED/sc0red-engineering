@@ -565,9 +565,17 @@ def main():
                         help="print the shared/ docs the rule templates cite, one per line (for make vendor-shared)")
     args = parser.parse_args()
     if args.cited_shared:
-        cited = set()
+        cited, found = set(), []
         for agent in RUNNER:
-            check_agent(agent, os.path.join(args.root, "workspaces", agent), cited, [])
+            check_agent(agent, os.path.join(args.root, "workspaces", agent), cited, found)
+        # The list is complete only if every workspace and template was read:
+        # any finding but "not vendored yet" (what vendoring fixes) refuses.
+        blocking = [f for f in found if "is not vendored in" not in f]
+        if blocking:
+            for finding in blocking:
+                print(finding, file=sys.stderr)
+            print("--cited-shared: fix these first; the cited list may be incomplete", file=sys.stderr)
+            return 1
         for doc in sorted(d for d in cited if d.startswith(SHARED_PREFIX)):
             print(doc[len(SHARED_PREFIX):])
         return 0
