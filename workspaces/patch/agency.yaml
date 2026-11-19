@@ -1,607 +1,136 @@
-# Patch's routing rules.
+# Patch: the author. Plans, builds, fixes and merges the cards on the GitHub
+# Project boards listed in boards.yaml.
 #
-# All rules require webhookEvent == "jira:issue_updated" so comment-add and
-# other side-events don't trip them.
+# How work reaches Patch: the `board-check` schedule rule below runs
+# agency_tools.board.sweep every two minutes and then stops, so no LLM run
+# happens. The sweep reads each board, claims cards in Patch's and Scarlett's
+# columns, and hands each stage to an agent with runtime.dispatch_task. The
+# dispatch arrives here as a routing.internal task whose taskType names the
+# stage. Patch never picks up work on its own and never moves a card except
+# through the one board tool its stage allows.
 #
-# Status-keyed rules use `any_item` against `changelog.items` to match only
-# on TRANSITIONS INTO a status, not on state-while-in-status. Field edits
-# (Rank, Risk, Automation recomputes) made while a ticket is in Plan or
-# Ready for Development don't re-fire Patch — only the transition into the
-# status does. This was SPE-1774's fix; SPE-1733 was the incident that
-# surfaced the bug (5 jobs, 2 duplicate PRs).
+# Every stage rule sets runTimeoutSecs. A run that times out or fails is
+# reported as failed; the sweep re-dispatches it once and then blocks the card
+# with the reason and the log tail.
 #
-# Rule order matters — first match wins. Only Bug / Story / Task are routed
-# for Plan and Ready for Development (those workflows carry type-specific
-# guidance). Other issue types and other columns fall through to no-match
-# and Patch does not run.
+# Card moves happen only inside the board.* tools, which hold the only token
+# with Projects permission. Patch's own run token (the one `gh` and git use in
+# Bash) is minted without it, so `gh project item-edit` cannot move a card.
+#
+# Concurrency (MAX_CONCURRENT_RUNS) is a daemon setting, not a workspace one;
+# it lives in agent.env beside this file.
+#
+# Shared discipline (constitution, engineering loop, shipping, review core,
+# issue-writing guides) is NOT copied here. engineering-standards stamps its
+# shared/ directory as a sibling of the workspaces, and the templates pull it in
+# with {{system-doc:<file>}} through the root below.
 
-# Inbound providers (transport + auth). Patch reacts to three external
-# surfaces; each provider's routing rules live under `routing:` below. Secret
-# VALUES live in 1Password (resolved on the box via op-bindings.json) — only
-# key references appear here. The `internal` routing group (Scarlett→Patch
-# task dispatch) is a synthetic namespace, not a provider, so it is NOT listed.
-#
-#   - jira   — Jira Cloud WebHook. Jira signs the body and sends
-#              `X-Hub-Signature: sha256=<hex>` (WebSub format) → signatureStrategy
-#              websub, verified against JIRA_HMAC_SECRET.
-#   - github — check_suite events for the github-pr-broken fallback. GitHub sends
-#              `X-Hub-Signature-256` → signatureStrategy github. The secret key is
-#              PATCH_GITHUB_WEBHOOK_SECRET, NOT the runtime's GITHUB_WEBHOOK_SECRET:
-#              the runtime auto-mounts the Builder PR-feedback loop at /hooks/github
-#              whenever GITHUB_WEBHOOK_SECRET is set, which would collide with this
-#              provider's route ("Overlapping method route" panic at boot). Patch is
-#              not Builder, so it must NOT set GITHUB_WEBHOOK_SECRET in its env; its
-#              own webhook secret lives under PATCH_GITHUB_WEBHOOK_SECRET.
-#   - slack  — alert-channel triage. Slack Socket Mode (a websocket Patch opens at
-#              startup), matching Winston — no inbound webhook, so no public ingress.
-
-# Cross-agent shared docs (engineering pipeline, anti-patterns, jira/github
-# auth, etc.) live ONCE per box at `agency-workspaces/shared/`. Declaring
-# that path as an extra system-doc root lets every `{{system-doc:shared/X}}`
-# directive resolve through the sibling instead of forcing the deploy to
-# stamp a copy inside this workspace. The runtime keeps the per-root
-# escape check on each entry — see `openspec/changes/add-system-doc-roots/`
-# in SC0RED/Agency.
 systemDocRoots:
   - ../shared
 
-providers:
-  - name: jira
-    routePath: /hooks/jira
-    signatureStrategy: websub
-    hmacSecretKey: JIRA_HMAC_SECRET
-  - name: github
-    routePath: /hooks/github
-    signatureStrategy: github
-    hmacSecretKey: PATCH_GITHUB_WEBHOOK_SECRET
-  - name: slack
-    transport: slack-socket
-    appTokenSecret: SLACK_APP_TOKEN
-    botTokenSecret: SLACK_BOT_TOKEN
+# Every template opens with an `## Intent` block.
+requireIntent: true
 
-# Patch is a coding agent: every run is implementation, planning, or review
-# work that wants the strongest model. The Rust runtime selects the model from
-# this workspace-level `runner.model` (it does not honor the old per-provider
-# `modelRules`), so Opus applies to all of Patch's routes uniformly.
 runner:
   type: claude-cli
-  model: claude-opus-4-8
-
-# Memory namespace declaration — referenced by per-rule `memory.namespace`
-# below. One namespace shared across plan + ready-for-dev + slack-alert so
-# planning lessons flow into implementation runs and pattern-recognition
-# on alerts cross-pollinates with both. Defaults: pruneAfter=365d,
-# maxStoresPerRun=5. SPE-1988.
-memory:
-  namespaces:
-    patch-personal:
-      embeddingProvider: openai
-      vectorStore: redis
+  model: claude-opus-5-5
 
 routing:
-  # Internal task dispatches — Scarlett dispatches Patch via POST /api/tasks
-  # when her code review returns `changes_requested`. Symmetric to how Patch
-  # dispatches Scarlett for plan-review and code-review (see scarlett/clawndom.yaml).
-  # Conditions evaluate against `{ taskType, ...context }` per Clawndom's
-  # internal-task routing convention.
+  schedule:
+    rules:
+      # The board check. Deterministic: the sweep does all the work in preRun
+      # and always_stop ends the rule before any LLM run is queued.
+      - name: board-check
+        cron: "*/2 * * * *"
+        timezone: America/New_York
+        messageTemplate: templates/board-check.md
+        deliverable: action
+        identity:
+          soul: false
+        preRunTools:
+          - module.python: agency_tools.board.sweep
+          - module.python: agency_tools.predicate.always_stop
+        preRun:
+          - name: sweep
+            tool: agency_tools.board.sweep
+            args:
+              agent: patch
+              config: boards.yaml
+          - name: stop
+            tool: agency_tools.predicate.always_stop
+            args:
+              reason: "board check ran in preRun; no LLM needed"
+        tools: []
+
   internal:
     rules:
-      - name: address-pr-feedback
+      # Plan → Planning. Investigate read-only, write the one plan comment,
+      # or propose a split, or block with one question. Ends in Plan Review.
+      - name: plan
         condition:
-          equals: { field: taskType, value: address-pr-feedback }
-        messageTemplate: templates/address-pr-feedback.md
+          equals: { field: taskType, value: plan }
+        messageTemplate: templates/plan.md
         deliverable: action
-        inputs:
-          - ticketKey
-          - ticketTitle
-          - ticketType
-          - verdictCommentId
-          - prUrls
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: ticketTitle
-            topK: 5
-            minSimilarity: 0.4
+        risk: low
+        runTimeoutSecs: 2700
+        identity:
+          soul: true
         tools:
-          - module.python: agency_tools.jira.get_comment
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.jira.create_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_reviews
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_comment
+          - module.python: agency_tools.board.read
+          - module.python: agency_tools.board.comment
+          - module.python: agency_tools.board.submit_plan
+          - module.python: agency_tools.board.propose_split
+          - module.python: agency_tools.board.block
 
-  jira:
-    rules:
-
-      # ── Plan: per-type ───────────────────────────────────────────────
-      - name: plan-bug
+      # Ready for Development → In Development. Build exactly the approved
+      # plan in an SSD worktree, clean make, Astra, open the PR through the
+      # gate. Ends in Code Review.
+      - name: build
         condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Bug }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Plan }
-        messageTemplate: templates/jira-plan-bug.md
-        dispatches:
-          - plan-review
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: issue.fields.summary
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.jira.update_issue
-          - module.python: agency_tools.aws.cloudwatch.filter_logs
-          - module.python: agency_tools.mongo.find
-          - module.python: agency_tools.clawndom.dispatch_task
-
-      - name: plan-story
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Story }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Plan }
-        messageTemplate: templates/jira-plan-story.md
-        dispatches:
-          - plan-review
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: issue.fields.summary
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.jira.update_issue
-          - module.python: agency_tools.aws.cloudwatch.filter_logs
-          - module.python: agency_tools.mongo.find
-          - module.python: agency_tools.clawndom.dispatch_task
-
-      - name: plan-task
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Task }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Plan }
-        messageTemplate: templates/jira-plan-task.md
-        dispatches:
-          - plan-review
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: issue.fields.summary
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.jira.update_issue
-          - module.python: agency_tools.aws.cloudwatch.filter_logs
-          - module.python: agency_tools.mongo.find
-          - module.python: agency_tools.clawndom.dispatch_task
-
-      # ── Ready for Development: per-type ──────────────────────────────
-      # Ready-for-development rules carry maxTurns: 500 because the
-      # implementation phase routinely cascades wider than the runner's
-      # 150-turn default. A single tuple-shape change in the engine can
-      # ripple through 18 test files = 60+ Edit calls = 60+ turns just
-      # for mechanical destructure updates, before tests run, before any
-      # PR. SPE-2010 hit the wall three times at 151 turns each ($13/run)
-      # before this lift. 500 is a generous ceiling — most rule firings
-      # finish well under it; the budget only matters for the worst case.
-      - name: ready-for-development-bug
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Bug }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Ready for Development }
-        messageTemplate: templates/jira-ready-for-dev-bug.md
+          equals: { field: taskType, value: build }
+        messageTemplate: templates/build.md
         deliverable: action
-        maxTurns: 500
-        dispatches:
-          - code-review
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: issue.fields.summary
-            topK: 5
-            minSimilarity: 0.4
+        risk: medium
+        runTimeoutSecs: 10800
+        identity:
+          soul: true
         tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_create
-          - module.python: agency_tools.github.pr_comment
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_reviews
-          - module.python: agency_tools.clawndom.dispatch_task
+          - module.python: agency_tools.board.read
+          - module.python: agency_tools.board.comment
+          - module.python: agency_tools.board.open_for_review
+          - module.python: agency_tools.board.block
 
-      - name: ready-for-development-story
+      # Code Review. CI failures and review threads are fixed in the same PR;
+      # when Scarlett's status is green on the head, merge through the gate,
+      # watch the deploy until the product works, then board.merged.
+      - name: code-review
         condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Story }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Ready for Development }
-        messageTemplate: templates/jira-ready-for-dev-story.md
+          equals: { field: taskType, value: code-review }
+        messageTemplate: templates/code-review.md
         deliverable: action
-        maxTurns: 500
-        dispatches:
-          - code-review
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: issue.fields.summary
-            topK: 5
-            minSimilarity: 0.4
+        risk: medium
+        runTimeoutSecs: 7200
+        identity:
+          soul: true
         tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_create
-          - module.python: agency_tools.github.pr_comment
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_reviews
-          - module.python: agency_tools.clawndom.dispatch_task
+          - module.python: agency_tools.board.read
+          - module.python: agency_tools.board.comment
+          - module.python: agency_tools.board.merged
+          - module.python: agency_tools.board.block
 
-      - name: ready-for-development-task
+      # Hotfix. A fix against production plus the back-merge to the trunk.
+      # Ends in Code Review like a build.
+      - name: hotfix
         condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Task }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Ready for Development }
-        messageTemplate: templates/jira-ready-for-dev-task.md
+          equals: { field: taskType, value: hotfix }
+        messageTemplate: templates/hotfix.md
         deliverable: action
-        maxTurns: 500
-        dispatches:
-          - code-review
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: issue.fields.summary
-            topK: 5
-            minSimilarity: 0.4
+        risk: high
+        runTimeoutSecs: 10800
+        identity:
+          soul: true
         tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_create
-          - module.python: agency_tools.github.pr_comment
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_reviews
-          - module.python: agency_tools.clawndom.dispatch_task
-
-      # ── Deploy to development: per-type ──────────────────────────────
-      # Fires when a human transitions the ticket into "Deploy to
-      # development" after Code Review — the human has approved the PR(s)
-      # and Patch's job is to merge + advance the ticket to "Deployed to
-      # Development".
-      # Same template for all three types — deploy is mechanical (merge PRs
-      # + transition), no per-type guidance like Plan/Ready-for-Development
-      # has. Three rules (not one any-of) to stay consistent with the
-      # existing per-type rule shape above.
-      - name: deploy-to-dev-bug
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Bug }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Deploy to development }
-        messageTemplate: templates/jira-deploy-to-dev.md
-        deliverable: action
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_merge
-
-      - name: deploy-to-dev-story
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Story }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Deploy to development }
-        messageTemplate: templates/jira-deploy-to-dev.md
-        deliverable: action
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_merge
-
-      - name: deploy-to-dev-task
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Task }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Deploy to development }
-        messageTemplate: templates/jira-deploy-to-dev.md
-        deliverable: action
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_merge
-
-      # ── Verified in Development: pulse-promote development → testing ─
-      # Trigger fires per ticket but the action is batched. The three
-      # repos share a single `testing` branch and the only safe promote
-      # is `development → testing` carrying every commit that's ahead.
-      # Cherry-picking a single ticket's commits would corrupt history.
-      # The template's Step-2 quiet-pipeline guard ensures nothing in
-      # Deploy-to-Dev or Deployed-to-Dev is silently riding along — if
-      # something is, the run posts a deferral comment and exits without
-      # transitioning the trigger ticket, so the next pulse picks it up.
-      # See workspaces/patch/templates/jira-verified-in-dev.md.
-      - name: verified-in-dev-bug
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Bug }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Verified in Development }
-        messageTemplate: templates/jira-verified-in-dev.md
-        deliverable: action
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.search
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_create
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_merge
-
-      - name: verified-in-dev-story
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Story }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Verified in Development }
-        messageTemplate: templates/jira-verified-in-dev.md
-        deliverable: action
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.search
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_create
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_merge
-
-      - name: verified-in-dev-task
-        condition:
-          all_of:
-            - equals: { field: webhookEvent, value: "jira:issue_updated" }
-            - equals: { field: issue.fields.issuetype.name, value: Task }
-            - any_item:
-                path: changelog.items
-                where:
-                  all_of:
-                    - equals: { field: field, value: status }
-                    - equals: { field: toString, value: Verified in Development }
-        messageTemplate: templates/jira-verified-in-dev.md
-        deliverable: action
-        tools:
-          - module.python: agency_tools.jira.get_issue
-          - module.python: agency_tools.jira.search
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.github.pr_list
-          - module.python: agency_tools.github.pr_create
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_merge
-
-  # GitHub rules: catch-all for PR check failures that arrive AFTER the
-  # run that opened the PR has ended (typical case: ready-for-dev or
-  # address-pr-feedback hits its turn budget right when CI is reporting
-  # red, so the in-template Step-7 watcher exits before seeing the
-  # failure). The ready-for-dev / address-pr-feedback flows already
-  # have their own CI loops; this is the out-of-band fallback.
-  #
-  # Trigger condition: check_suite.completed with conclusion=failure on
-  # a PR-attached check suite. Filter:
-  #   - action == "completed"          (one event per suite; ignore created/requested)
-  #   - check_suite.conclusion=failure (skip success/cancelled/neutral/skipped)
-  #   - check_suite.pull_requests has ≥1 entry (skip pushes to base branches)
-  github:
-    rules:
-      - name: pr-broken
-        condition:
-          all_of:
-            - equals: { field: action, value: completed }
-            - equals: { field: check_suite.conclusion, value: failure }
-            - any_item:
-                path: check_suite.pull_requests
-                where:
-                  exists: { field: number }
-        messageTemplate: templates/github-pr-broken.md
-        deliverable: action
-        maxTurns: 200
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: check_suite.head_commit.message
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.jira.create_issue
-          - module.python: agency_tools.github.pr_view
-          - module.python: agency_tools.github.pr_diff
-          - module.python: agency_tools.github.pr_check_runs
-          - module.python: agency_tools.github.pr_reviews
-          - module.python: agency_tools.github.pr_comment
-
-  # Slack rules: channel-id → environment mapping verified against the
-  # Slack API on 2026-04-25. Previous version of this file had all three
-  # rules pointed at the wrong channel, so Patch was labeling production
-  # failures as "development" etc. on every fire — same template,
-  # mislabeled output. Don't trust the rule name without checking the
-  # channel id.
-  #
-  # Each rule has three predicates beyond the channel match:
-  #   - exists(event.bot_id) — only fire on bot-authored messages.
-  #     Alerts come from the alerting bot (or any monitor bot integration);
-  #     a human typing "hi" in the channel has no bot_id and is filtered.
-  #   - not(equals(event.bot_id, "B0ALY9FMKE2")) — never fire on our own
-  #     `patch` bot's replies. Patch posts in-thread diagnoses; without
-  #     this filter, that reply is itself a message.channels event and
-  #     Patch would fire on its own output → infinite self-loop until
-  #     Slack rate-limits or Claude CLI hits its turn cap.
-  slack:
-    rules:
-      - name: alerts-production
-        condition:
-          all_of:
-            - equals:
-                field: event.channel
-                value: C08UVJDJZTL  # #alerts-platform-failure-production
-            - exists: { field: event.bot_id }
-            - not:
-                equals: { field: event.bot_id, value: B0ALY9FMKE2 }
-        messageTemplate: templates/slack-alert.md
-        deliverable: action
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: event.text
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.aws.cloudwatch.filter_logs
-          - module.python: agency_tools.mongo.find
-          - module.python: agency_tools.jira.search
-          - module.python: agency_tools.jira.create_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.slack.post
-
-      - name: alerts-testing
-        condition:
-          all_of:
-            - equals:
-                field: event.channel
-                value: C08UWMQJFBN  # #alerts-platform-failure-testing
-            - exists: { field: event.bot_id }
-            - not:
-                equals: { field: event.bot_id, value: B0ALY9FMKE2 }
-        messageTemplate: templates/slack-alert.md
-        deliverable: action
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: event.text
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.aws.cloudwatch.filter_logs
-          - module.python: agency_tools.mongo.find
-          - module.python: agency_tools.jira.search
-          - module.python: agency_tools.jira.create_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.slack.post
-
-      - name: alerts-development
-        condition:
-          all_of:
-            - equals:
-                field: event.channel
-                value: C08V6MV0VNV  # #alerts-platform-failure-development
-            - exists: { field: event.bot_id }
-            - not:
-                equals: { field: event.bot_id, value: B0ALY9FMKE2 }
-        messageTemplate: templates/slack-alert.md
-        deliverable: action
-        memory:
-          namespace: patch-personal
-          retrieve:
-            queryField: event.text
-            topK: 5
-            minSimilarity: 0.4
-        tools:
-          - module.python: agency_tools.aws.cloudwatch.filter_logs
-          - module.python: agency_tools.mongo.find
-          - module.python: agency_tools.jira.search
-          - module.python: agency_tools.jira.create_issue
-          - module.python: agency_tools.jira.add_comment
-          - module.python: agency_tools.jira.transition_issue
-          - module.python: agency_tools.slack.post
-
-# Model selection is workspace-level (see `runner.model` above): Patch runs on
-# Opus across every route. The old per-provider `modelRules` block is dropped —
-# the Rust runtime doesn't parse it, and Opus-everywhere matches Patch's intent
-# (all of its work is implementation/planning/review).
+          - module.python: agency_tools.board.read
+          - module.python: agency_tools.board.comment
+          - module.python: agency_tools.board.open_for_review
+          - module.python: agency_tools.board.block

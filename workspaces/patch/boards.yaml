@@ -1,0 +1,64 @@
+# The boards Patch's board check sweeps. The board tools
+# (agency_tools.board.*) read this file; it is the only place a board, its
+# repos, and which column belongs to which agent are written down.
+#
+# columns: a column listed here is an agent column. `claim` is the column the
+# card moves to when the sweep claims it (Plan → Planning, Ready for
+# Development → In Development); `stage` is the taskType dispatched.
+# Columns not listed (New, Triage, Backlog, Plan Review after Scarlett's
+# verdict, the Deployed/Verified columns, Blocked) belong to the owner.
+# Ready for Development is never written by any agent: the owner moves cards
+# there himself.
+
+agents:
+  patch:
+    runSlots: 2
+  scarlett:
+    runSlots: 1
+
+boards:
+  - name: NeuroBloom
+    owner: neurobloom-lilly
+    project: 2
+    agentField: Agent
+    blockedColumn: Blocked
+    repos:
+      neurobloom-lilly/neurobloom-app: { trunk: development, production: production }
+      neurobloom-lilly/neurobloom-backend: { trunk: development, production: production }
+      neurobloom-lilly/neurobloom-infra: { trunk: development, production: production }
+      neurobloom-lilly/neurobloom-mcp: { trunk: development, production: production }
+      neurobloom-lilly/neurobloom-website: { trunk: development, production: production }
+    afterMerge: Deployed to Development
+    columns:
+      Plan: { agent: patch, stage: plan, claim: Planning }
+      Planning: { agent: patch, stage: plan }
+      Plan Review: { agent: scarlett, stage: plan-review, until: verdict }
+      Ready for Development: { agent: patch, stage: build, claim: In Development }
+      In Development: { agent: patch, stage: build }
+      Code Review:
+        - { agent: scarlett, stage: code-review, until: status }
+        - { agent: patch, stage: code-review }
+      Hotfix: { agent: patch, stage: hotfix }
+
+  # Not live until NeuroBloom has run end to end (design: "The Winston board").
+  - name: Winston
+    owner: SC0RED
+    project: 1
+    enabled: false
+    agentField: Agent
+    blockedColumn: Blocked
+    repos:
+      SC0RED/Agency: { trunk: development, production: production }
+      SC0RED/agency-tools: { trunk: main }
+      SC0RED/winston-agency: { trunk: main }
+    afterMerge: Merged
+    columns:
+      Plan: { agent: patch, stage: plan, claim: Planning }
+      Planning: { agent: patch, stage: plan }
+      Plan Review: { agent: scarlett, stage: plan-review, until: verdict }
+      Ready for Development: { agent: patch, stage: build, claim: In Development }
+      In Development: { agent: patch, stage: build }
+      Code Review:
+        - { agent: scarlett, stage: code-review, until: status }
+        - { agent: patch, stage: code-review }
+      Hotfix: { agent: patch, stage: hotfix }
