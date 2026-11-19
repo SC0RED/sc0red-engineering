@@ -65,6 +65,7 @@ vendor-shared: ## Copy the cited shared/ docs from engineering-standards
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
 	@python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
 	@docs=$$(python3 scripts/check_workspace.py --cited-shared) || exit 1; \
+	test -n "$$docs" || { echo "vendor-shared: no template cites a shared/ doc; workspaces/shared/ left as it was"; exit 1; }; \
 	stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX"); trap 'rm -rf "$$stage"' EXIT; \
 	for doc in $$docs; do \
 		test -f "$(ENGINEERING_STANDARDS)/shared/$$doc" || { echo "vendor-shared: $(ENGINEERING_STANDARDS)/shared/$$doc is missing; workspaces/shared/ left as it was"; exit 1; }; \

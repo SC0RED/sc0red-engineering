@@ -100,6 +100,9 @@ READ_ONLY_PERMISSIONS = {
 # may name it.
 REVIEW_POSTER = "scarlett-review"
 REVIEW_POSTER_OWNER = "scarlett"
+# Scarlett runs as the user that can read her App key, so she never executes
+# a PR's code: her workspace never names the make recorder.
+NEVER_RUNS_PR_CODE = {"scarlett": "make-verified"}
 SHARED_PREFIX = "shared/"
 SYSTEM_DOC = re.compile(r"\{\{\s*system-doc:\s*([^}\s]+)\s*\}\}")
 
@@ -272,9 +275,12 @@ def check_run_token(agent, env, findings):
 
 def check_review_poster(agent, ws, findings):
     """Only Scarlett's workspace names the tool that posts her status: Patch
-    never runs it, so Patch never needs her App key."""
+    never runs it, so Patch never needs her App key. Scarlett's never names
+    the make recorder, since running a PR's make would run its code as her."""
     if agent == REVIEW_POSTER_OWNER:
-        return
+        forbidden, reason = NEVER_RUNS_PR_CODE[agent], "Scarlett never runs a PR's code"
+    else:
+        forbidden, reason = REVIEW_POSTER, "only Scarlett posts her status"
     for dirpath, _, files in os.walk(ws):
         for file in sorted(files):
             path = os.path.join(dirpath, file)
@@ -282,9 +288,8 @@ def check_review_poster(agent, ws, findings):
                 text = open(path, encoding="utf-8").read()
             except (UnicodeDecodeError, OSError):
                 continue
-            if REVIEW_POSTER in text:
-                findings.append(f"{agent}: {os.path.relpath(path, os.path.dirname(ws))} names {REVIEW_POSTER}; "
-                                f"only Scarlett posts her status")
+            if forbidden in text:
+                findings.append(f"{agent}: {os.path.relpath(path, os.path.dirname(ws))} names {forbidden}; {reason}")
 
 
 def sweep_boards(root):
@@ -513,6 +518,12 @@ def self_test(repo_root):
         _write(path, open(path, encoding="utf-8").read() + "\nRun ~/.claude/hooks/" + REVIEW_POSTER + ".\n")
         if not any(REVIEW_POSTER in f and f.startswith("patch:") for f in run(root, None)):
             failures.append(f"patch-poster: a Patch template naming {REVIEW_POSTER} not flagged")
+        root = os.path.join(scratch, "scarlett-runs-make")
+        shutil.copytree(base, root)
+        path = os.path.join(root, "workspaces", "scarlett", "templates", "code-review.md")
+        _write(path, open(path, encoding="utf-8").read() + "\nRun ~/.claude/hooks/make-verified.\n")
+        if not any("make-verified" in f and f.startswith("scarlett:") for f in run(root, None)):
+            failures.append("scarlett-runs-make: a Scarlett template running make-verified not flagged")
         root = os.path.join(scratch, "duplicate-stage")
         shutil.copytree(base, root)
         _mutate(root, "patch", lambda c: c["routing"]["internal"]["rules"].append(

@@ -53,11 +53,12 @@ routing:
           - module.python: agency_tools.board.post_verdict
           - module.python: agency_tools.board.block
 
-      # Code Review. Her own clean make and Astra review of the PR head, in a
-      # worktree of her own that holds only that head and its gate records
-      # (her run token has no contents write, so she cannot push). On Astra
-      # "merge" the gate's scarlett-review posts scarlett/review/<base>, the
-      # status that lets the PR merge; on "do not merge", board.block.
+      # Code Review. Read-only: she reads the diff in a read-only checkout of
+      # the head, runs Astra in its read-only sandbox, and reads GitHub's CI
+      # results for the head. She never executes the PR's code, since she runs
+      # as the user that can read her App key. On CI green and Astra "merge"
+      # the gate's scarlett-review posts scarlett/review/<base>, the status
+      # that lets the PR merge; otherwise board.block.
       - name: code-review
         condition:
           equals: { field: taskType, value: code-review }

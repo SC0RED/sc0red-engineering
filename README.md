@@ -14,11 +14,11 @@ The board is the state. Every two minutes, Patch's `board-check` schedule rule r
 | Plan → Planning | Patch | `plan` | `board.submit_plan` (→ Plan Review), `board.propose_split`, or `board.block` |
 | Plan Review | Scarlett | `plan-review` | `board.post_verdict` (approve stays for the owner) |
 | Ready for Development → In Development | Patch | `build` | `board.open_for_review` (→ Code Review) |
-| Code Review | Scarlett | `code-review` | `scarlett/review/<base>` posted by the gate's `scarlett-review`, or `board.block` with the findings |
+| Code Review | Scarlett | `code-review` | read-only review (diff, Astra, GitHub CI; she never runs the PR's code), then `scarlett/review/<base>` posted by the gate's `scarlett-review`, or `board.block` with the findings |
 | Code Review | Patch | `code-review` | merge through the gate once Scarlett's status is on the head, deploy watched, then `board.merged` |
 | Hotfix | Patch | `hotfix` | two PRs (production fix and trunk back-merge), then `board.open_for_review`; the card moves on only when both have merged |
 
-The owner's gate is the plan: he moves a card from Plan Review to Ready for Development himself, and no agent tool can make that move. PRs have no per-PR human approval; they merge when the gate's and GitHub's rules are met, and Scarlett's status stands for a clean `make` and an Astra "merge" on that head.
+The owner's gate is the plan: he moves a card from Plan Review to Ready for Development himself, and no agent tool can make that move. PRs have no per-PR human approval; they merge when the gate's and GitHub's rules are met, and Scarlett's status stands for green CI (which runs bare `make`) and her Astra "merge" on that head. Only Scarlett posts it; the gate's merge checks that GitHub shows it.
 
 Each stage's tool allowlist holds only that stage's board moves. Patch's own run token has no Projects permission, so the board tools are the only way a card moves. Every stage rule sets `runTimeoutSecs`, and a failed or timed-out run is re-dispatched once by the sweep, then blocked with the reason.
 

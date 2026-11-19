@@ -69,9 +69,9 @@ routing:
           # this rule from a loop that awaits each fire, preRun included, so
           # its own passes are serial, except that a fire missed at boot is
           # recovered beside the loop. Only one Patch daemon may run this
-          # workspace. If two passes do overlap, the sweep re-reads each card
-          # before and after every write and reports a card the other pass
-          # moved under `ignored`, so neither dispatches it twice.
+          # workspace. The sweep re-reads each card around every write, which
+          # narrows but does not close a race between two overlapping passes:
+          # they can dispatch the same card twice.
           # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
           # joins with its own step after NeuroBloom has run end to end.
           - name: sweepNeurobloom
