@@ -15,8 +15,8 @@ The board is the state. Every two minutes, Patch's `board-check` schedule rule r
 | Plan Review | Scarlett | `plan-review` | `board.post_verdict` (approve stays for the owner) |
 | Ready for Development → In Development | Patch | `build` | `board.open_for_review` (→ Code Review) |
 | Code Review | Scarlett | `code-review` | `scarlett/review/<base>` posted by the gate's `scarlett-review`, or `board.block` with the findings |
-| Code Review | Patch | `code-review` | merge through the gate, deploy watched, then `board.merged` |
-| Hotfix | Patch | `hotfix` | `board.open_for_review` |
+| Code Review | Patch | `code-review` | merge through the gate once Scarlett's status is on the head, deploy watched, then `board.merged` |
+| Hotfix | Patch | `hotfix` | two PRs (production fix and trunk back-merge), then `board.open_for_review`; the card moves on only when both have merged |
 
 The owner's gate is the plan: he moves a card from Plan Review to Ready for Development himself, and no agent tool can make that move. PRs have no per-PR human approval; they merge when the gate's and GitHub's rules are met, and Scarlett's status stands for a clean `make` and an Astra "merge" on that head.
 
@@ -30,7 +30,7 @@ The full design is in `ENGINEERING_TEAM_DESIGN.md` (the lead's copy, beside this
 - `workspaces/<agent>/templates/`: one prompt per stage. Each opens with `## Intent` and cites engineering-standards rather than restating it.
 - `workspaces/<agent>/identity/`: SOUL and IDENTITY.
 - `workspaces/<agent>/agent.env`: daemon settings the launchd job loads (`MAX_CONCURRENT_RUNS`: Patch 2, Scarlett 1).
-- The `board-check` rule in `workspaces/patch/agency.yaml` holds each board's config (project, repos, which column dispatches which agent and stage, run slots) as the `board.sweep` argument; who a block mentions is `BOARD_NOTIFY_LOGIN` in each `agent.env`. The sweep dispatches each stage with context `{project, repo, issue, column, attempt}`.
+- The `board-check` rule in `workspaces/patch/agency.yaml` holds each board's config (project, repos, which column dispatches which agent and stage, run slots) as the `board.sweep` argument; who a block mentions is `BOARD_NOTIFY_LOGIN` in each `agent.env`. The sweep dispatches each stage with context `{project, repo, issue, column, attempt}`, plus `pull_number` for both Code Review turns.
 
 Shared discipline (the constitution, engineering loop, shipping, review core, issue guides) lives in engineering-standards' `shared/`. `workspaces/shared/` vendors exactly the docs the templates cite, unedited, and `systemDocRoots: [..]` resolves `{{system-doc:shared/...}}` against it. To pick up a change in engineering-standards, run `make vendor-shared` and commit the result; never edit the copy here.
 

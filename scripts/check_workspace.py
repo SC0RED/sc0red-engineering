@@ -21,22 +21,27 @@ Neither knows what this team's design promises, so this checks that:
 - MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 1) agrees with each
   swept board's run slots;
 - each agent's run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no
-  Projects permission, so only the board tools move cards, and Scarlett's has
-  no contents write, so she cannot push;
+  Projects permission, so only the board tools move cards, Scarlett's has
+  no contents write, so she cannot push, and Patch's has no statuses write;
+- only Scarlett's workspace names scarlett-review, the tool that posts her
+  status with her App key, so Patch never runs it;
+- one routing.internal rule per stage;
 - Code Review dispatches Patch as the author and Scarlett as the reviewer,
   whose status counts only from the sc0red-scarlett App;
 - every column a board sweep dispatches maps to a stage that has a rule, and
   Ready for Development is never a stage column (the owner moves cards there;
   the sweep only claims them out of it);
 - every template exists and opens with an `## Intent` block, and every
-  {{system-doc:...}} directive resolves in the workspace or the vendored
-  workspaces/shared/, which holds exactly the docs the templates cite;
+  {{system-doc:...}} directive resolves; a shared/ one only in the vendored
+  workspaces/shared/, which holds exactly the docs the templates cite, and no
+  workspace has its own shared/ that the runtime would load instead;
 - with --shared, each vendored doc is byte-identical to engineering-standards'
   shared/ (the copy is never edited here).
 
 Usage:
     check_workspace.py --root <repo root> [--shared <engineering-standards/shared>]
     check_workspace.py --self-test
+    check_workspace.py --cited-shared
 
 Exit 0 = clean; exit 1 = findings, one per line.
 """
@@ -85,7 +90,16 @@ FORBIDDEN_PERMISSIONS = {
     "patch": {"organization_projects", "repository_projects"},
     "scarlett": {"organization_projects", "repository_projects"},
 }
-READ_ONLY_PERMISSIONS = {"scarlett": {"contents"}}
+# Scarlett pushes nothing; Patch posts no status, so scarlett/review/<base>
+# comes only from Scarlett's own run.
+READ_ONLY_PERMISSIONS = {
+    "scarlett": {"contents": "Scarlett pushes nothing"},
+    "patch": {"statuses": "only Scarlett posts scarlett/review"},
+}
+# The tool that posts Scarlett's status with her App key. Only her workspace
+# may name it.
+REVIEW_POSTER = "scarlett-review"
+REVIEW_POSTER_OWNER = "scarlett"
 SHARED_PREFIX = "shared/"
 SYSTEM_DOC = re.compile(r"\{\{\s*system-doc:\s*([^}\s]+)\s*\}\}")
 
@@ -123,10 +137,15 @@ def check_template(agent, ws, rule_name, template, cited, findings):
     if not text.lstrip().startswith("## Intent"):
         findings.append(f"{agent}/{rule_name}: {template} does not open with an `## Intent` block")
     # systemDocRoots is [..]: a directive resolves in the workspace, then
-    # beside it (workspaces/shared/ for a shared/ path).
+    # beside it (workspaces/shared/ for a shared/ path). A shared/ doc must
+    # resolve only in the vendored copy: a workspace-local one would load
+    # first and skip the drift check (check_vendored rejects it).
     for doc in SYSTEM_DOC.findall(text):
         cited.add(doc)
-        if not (os.path.isfile(os.path.join(ws, doc)) or os.path.isfile(os.path.join(os.path.dirname(ws), doc))):
+        if doc.startswith(SHARED_PREFIX):
+            if not os.path.isfile(os.path.join(os.path.dirname(ws), doc)):
+                findings.append(f"{agent}/{rule_name}: {{{{system-doc:{doc}}}}} is not vendored in workspaces/{doc}")
+        elif not (os.path.isfile(os.path.join(ws, doc)) or os.path.isfile(os.path.join(os.path.dirname(ws), doc))):
             findings.append(f"{agent}/{rule_name}: {{{{system-doc:{doc}}}}} resolves neither in the workspace "
                             f"nor in workspaces/{doc}")
 
@@ -161,6 +180,8 @@ def check_agent(agent, ws, cited, findings):
                 findings.append(f"{agent}/{name}: condition must be equals taskType")
                 continue
             timeout = rule.get("runTimeoutSecs")
+            if stage in stages:
+                findings.append(f"{agent}/{name}: a second rule for stage {stage!r}; one rule per stage")
             stages[stage] = timeout if isinstance(timeout, int) else None
             if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
                 findings.append(f"{agent}/{name}: runTimeoutSecs must be a positive integer, got {timeout!r}")
@@ -223,6 +244,7 @@ def check_agent(agent, ws, cited, findings):
     if env.get("AGENCY_AGENT_ID") != agent:
         findings.append(f"{agent}: agent.env AGENCY_AGENT_ID is {env.get('AGENCY_AGENT_ID')!r}, expected {agent!r}")
     check_run_token(agent, env, findings)
+    check_review_poster(agent, ws, findings)
     return stages
 
 
@@ -243,9 +265,26 @@ def check_run_token(agent, env, findings):
         permissions[name] = level
     for name in sorted(set(permissions) & FORBIDDEN_PERMISSIONS[agent]):
         findings.append(f"{agent}: run token has {name}; only the board tools may move a card")
-    for name in sorted(READ_ONLY_PERMISSIONS.get(agent, set())):
+    for name, reason in sorted(READ_ONLY_PERMISSIONS.get(agent, {}).items()):
         if permissions.get(name) == "write":
-            findings.append(f"{agent}: run token has {name}:write; {agent} pushes nothing")
+            findings.append(f"{agent}: run token has {name}:write; {reason}")
+
+
+def check_review_poster(agent, ws, findings):
+    """Only Scarlett's workspace names the tool that posts her status: Patch
+    never runs it, so Patch never needs her App key."""
+    if agent == REVIEW_POSTER_OWNER:
+        return
+    for dirpath, _, files in os.walk(ws):
+        for file in sorted(files):
+            path = os.path.join(dirpath, file)
+            try:
+                text = open(path, encoding="utf-8").read()
+            except (UnicodeDecodeError, OSError):
+                continue
+            if REVIEW_POSTER in text:
+                findings.append(f"{agent}: {os.path.relpath(path, os.path.dirname(ws))} names {REVIEW_POSTER}; "
+                                f"only Scarlett posts her status")
 
 
 def sweep_boards(root):
@@ -306,7 +345,14 @@ def check_boards(root, stages_by_agent, findings):
 
 def check_vendored(root, cited, upstream, findings):
     """workspaces/shared/ holds exactly the shared/ docs the templates cite,
-    each unedited from engineering-standards (checked when upstream is given)."""
+    each unedited from engineering-standards (checked when upstream is given).
+    No workspace holds its own shared/: the runtime would load that copy first,
+    and it is not the one compared with engineering-standards."""
+    for agent in RUNNER:
+        local = os.path.join(root, "workspaces", agent, "shared")
+        if os.path.lexists(local):
+            findings.append(f"shared: workspaces/{agent}/shared/ shadows the vendored workspaces/shared/ at "
+                            f"runtime; remove it")
     vendored_dir = os.path.join(root, "workspaces", "shared")
     vendored = set()
     if os.path.isdir(vendored_dir):
@@ -454,6 +500,30 @@ def self_test(repo_root):
         _write(os.path.join(root, "workspaces", "scarlett", "templates", "plan-review.md"), "no intent\n")
         if not any("## Intent" in f for f in run(root, None)):
             failures.append("intent: a template without `## Intent` not flagged")
+        root = os.path.join(scratch, "patch-statuses")
+        shutil.copytree(base, root)
+        path = os.path.join(root, "workspaces", "patch", "agent.env")
+        env = open(path, encoding="utf-8").read().replace("statuses:read", "statuses:write")
+        _write(path, env)
+        if not any("statuses:write" in f for f in run(root, None)):
+            failures.append("patch-statuses: a Patch run token that can post statuses not flagged")
+        root = os.path.join(scratch, "patch-poster")
+        shutil.copytree(base, root)
+        path = os.path.join(root, "workspaces", "patch", "templates", "code-review.md")
+        _write(path, open(path, encoding="utf-8").read() + "\nRun ~/.claude/hooks/" + REVIEW_POSTER + ".\n")
+        if not any(REVIEW_POSTER in f and f.startswith("patch:") for f in run(root, None)):
+            failures.append(f"patch-poster: a Patch template naming {REVIEW_POSTER} not flagged")
+        root = os.path.join(scratch, "duplicate-stage")
+        shutil.copytree(base, root)
+        _mutate(root, "patch", lambda c: c["routing"]["internal"]["rules"].append(
+            dict(copy.deepcopy(internal(c, "build")), name="build-again")))
+        if not any("second rule for stage" in f for f in run(root, None)):
+            failures.append("duplicate-stage: two rules for one stage not flagged")
+        root = os.path.join(scratch, "local-shadow")
+        shutil.copytree(base, root)
+        _write(os.path.join(root, "workspaces", "patch", "shared", "constitution.md"), "edited\n")
+        if not any("shadows the vendored" in f for f in run(root, None)):
+            failures.append("local-shadow: a workspace-local shared doc not flagged")
         root = os.path.join(scratch, "unvendored")
         shutil.copytree(base, root)
         os.remove(os.path.join(root, "workspaces", "shared", "constitution.md"))
@@ -480,7 +550,16 @@ def main():
     parser.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     parser.add_argument("--shared", help="engineering-standards shared/ directory the vendored copy must match")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--cited-shared", action="store_true",
+                        help="print the shared/ docs the rule templates cite, one per line (for make vendor-shared)")
     args = parser.parse_args()
+    if args.cited_shared:
+        cited = set()
+        for agent in RUNNER:
+            check_agent(agent, os.path.join(args.root, "workspaces", agent), cited, [])
+        for doc in sorted(d for d in cited if d.startswith(SHARED_PREFIX)):
+            print(doc[len(SHARED_PREFIX):])
+        return 0
     if args.self_test:
         failures = self_test(args.root)
         for failure in failures:

@@ -46,7 +46,7 @@ check-system-docs:
 validate-workspace:
 	@test -x "$(AGENCY_BIN)" || { echo "AGENCY_BIN must name an agency binary built from Agency development (got '$(AGENCY_BIN)')"; exit 1; }
 	@stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX"); trap 'rm -rf "$$stage"' EXIT; \
-	cp -R workspaces/patch workspaces/scarlett workspaces/shared "$$stage/"; \
+	cp -R $(addprefix workspaces/,$(AGENTS)) workspaces/shared "$$stage/"; \
 	for agent in $(AGENTS); do \
 		"$(AGENCY_BIN)" validate-workspace "$$stage/$$agent" || exit 1; \
 	done
@@ -63,11 +63,15 @@ tool-refs:
 # docs the templates cite, copied unedited. check-system-docs fails on drift.
 vendor-shared: ## Copy the cited shared/ docs from engineering-standards
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
-	@rm -rf workspaces/shared && mkdir -p workspaces/shared
-	@for doc in $$(grep -rhoE '\{\{ *system-doc: *shared/[A-Za-z0-9._/-]+' workspaces/patch workspaces/scarlett | sed -E 's|.*shared/||' | sort -u); do \
-		mkdir -p "workspaces/shared/$$(dirname "$$doc")" && cp "$(ENGINEERING_STANDARDS)/shared/$$doc" "workspaces/shared/$$doc" || exit 1; \
-	done
-	@echo "vendor-shared: $$(find workspaces/shared -type f | wc -l | tr -d ' ') doc(s) from $(ENGINEERING_STANDARDS)/shared"
+	@python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
+	@docs=$$(python3 scripts/check_workspace.py --cited-shared) || exit 1; \
+	stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX"); trap 'rm -rf "$$stage"' EXIT; \
+	for doc in $$docs; do \
+		test -f "$(ENGINEERING_STANDARDS)/shared/$$doc" || { echo "vendor-shared: $(ENGINEERING_STANDARDS)/shared/$$doc is missing; workspaces/shared/ left as it was"; exit 1; }; \
+		mkdir -p "$$stage/shared/$$(dirname "$$doc")" && cp "$(ENGINEERING_STANDARDS)/shared/$$doc" "$$stage/shared/$$doc" || exit 1; \
+	done; \
+	rm -rf workspaces/shared && mv "$$stage/shared" workspaces/shared && \
+	echo "vendor-shared: $$(find workspaces/shared -type f | wc -l | tr -d ' ') doc(s) from $(ENGINEERING_STANDARDS)/shared"
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-18s %s\n",$$1,$$2}'
