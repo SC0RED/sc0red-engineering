@@ -65,6 +65,10 @@ routing:
           # sc0red-scarlett App, is green on the head.
           # Ready for Development is not a stage column: the owner moves cards
           # there and the sweep claims them into In Development.
+          # Two passes over one board never overlap: the daemon fires a cron
+          # rule from one loop that awaits each fire, preRun included, before
+          # sleeping to the next, and the fire claim stops a second daemon
+          # firing the same minute. A schedule rule takes no singleFlightKey.
           # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
           # joins with its own step after NeuroBloom has run end to end.
           - name: sweepNeurobloom

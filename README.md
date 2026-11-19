@@ -14,7 +14,7 @@ The board is the state. Every two minutes, Patch's `board-check` schedule rule r
 | Plan → Planning | Patch | `plan` | `board.submit_plan` (→ Plan Review), `board.propose_split`, or `board.block` |
 | Plan Review | Scarlett | `plan-review` | `board.post_verdict` (approve stays for the owner) |
 | Ready for Development → In Development | Patch | `build` | `board.open_for_review` (→ Code Review) |
-| Code Review | Scarlett | `code-review` | `scarlett/review/<base>` posted by the gate's `scarlett-review`, or a findings comment |
+| Code Review | Scarlett | `code-review` | `scarlett/review/<base>` posted by the gate's `scarlett-review`, or `board.block` with the findings |
 | Code Review | Patch | `code-review` | merge through the gate, deploy watched, then `board.merged` |
 | Hotfix | Patch | `hotfix` | `board.open_for_review` |
 
@@ -30,15 +30,15 @@ The full design is in `ENGINEERING_TEAM_DESIGN.md` (the lead's copy, beside this
 - `workspaces/<agent>/templates/`: one prompt per stage. Each opens with `## Intent` and cites engineering-standards rather than restating it.
 - `workspaces/<agent>/identity/`: SOUL and IDENTITY.
 - `workspaces/<agent>/agent.env`: daemon settings the launchd job loads (`MAX_CONCURRENT_RUNS`: Patch 2, Scarlett 1).
-- The `board-check` rule in `workspaces/patch/agency.yaml` holds each board's config (project, repos, which column dispatches which agent and stage, run slots, who a block mentions) as the `board.sweep` argument. The sweep dispatches each stage with context `{project, repo, issue, column, attempt}`.
+- The `board-check` rule in `workspaces/patch/agency.yaml` holds each board's config (project, repos, which column dispatches which agent and stage, run slots) as the `board.sweep` argument; who a block mentions is `BOARD_NOTIFY_LOGIN` in each `agent.env`. The sweep dispatches each stage with context `{project, repo, issue, column, attempt}`.
 
-Shared discipline (the constitution, engineering loop, shipping, review core, issue guides) is not copied here. engineering-standards stamps its `shared/` directory beside the workspaces, and `systemDocRoots: [../shared]` resolves `{{system-doc:...}}` against it.
+Shared discipline (the constitution, engineering loop, shipping, review core, issue guides) lives in engineering-standards' `shared/`. `workspaces/shared/` vendors exactly the docs the templates cite, unedited, and `systemDocRoots: [..]` resolves `{{system-doc:shared/...}}` against it. To pick up a change in engineering-standards, run `make vendor-shared` and commit the result; never edit the copy here.
 
 ## Checks
 
 Bare `make` runs every check:
 
 - `check-structure`: no symlinks, and `check_workspace.py` (with its self-test). Actions runs this subset.
-- `check-system-docs`: every `{{system-doc:...}}` resolves against `$(ENGINEERING_STANDARDS)/shared`.
-- `validate-workspace`: `agency validate-workspace` on each workspace, staged beside engineering-standards' `shared/`, with `AGENCY_BIN` built from Agency `development`.
+- `check-system-docs`: each vendored doc in `workspaces/shared/` is byte-identical to `$(ENGINEERING_STANDARDS)/shared`.
+- `validate-workspace`: `agency validate-workspace` on each workspace, staged beside the vendored `shared/`, with `AGENCY_BIN` built from Agency `development`.
 - `tool-refs`: agency-tools' `validate_workspace.py`, so every `module.python` reference resolves in `$(AGENCY_TOOLS)`.
