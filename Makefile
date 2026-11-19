@@ -46,7 +46,7 @@ check-system-docs:
 validate-workspace:
 	@test -x "$(AGENCY_BIN)" || { echo "AGENCY_BIN must name an agency binary built from Agency development (got '$(AGENCY_BIN)')"; exit 1; }
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
-	@stage=$$(mktemp -d -t sc0red-engineering-validate.XXXXXX); trap 'rm -rf "$$stage"' EXIT; \
+	@stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX"); trap 'rm -rf "$$stage"' EXIT; \
 	cp -R workspaces/patch workspaces/scarlett "$$stage/"; \
 	cp -R "$(ENGINEERING_STANDARDS)/shared" "$$stage/shared"; \
 	for agent in $(AGENTS); do \

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
-workspaces/patch/jira-workflow.yaml
+# validate-workspace staging, beside the checkout on the SSD
+.validate.*/
 .openclaw/
 .idea/

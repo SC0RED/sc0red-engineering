@@ -12,6 +12,10 @@
 # get, limited to the rule's allowlist. Until that bridge ships, the codex runner
 # ignores `tools:` and these rules cannot run as intended.
 #
+# Her run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no Projects
+# and no contents write permission: she moves no card outside her board tools
+# and pushes nothing.
+#
 # Separation of duties: Scarlett runs as her own macOS user with her own
 # 1Password service account, the only one that can read the sc0red-scarlett
 # App key. Her code review posts `scarlett/review/<base>` through the gate's
@@ -19,8 +23,10 @@
 #
 # Concurrency (MAX_CONCURRENT_RUNS 1) lives in agent.env beside this file.
 
+# Shared discipline: engineering-standards' shared/, vendored unedited into
+# workspaces/shared/ and cited as {{system-doc:shared/<file>}}.
 systemDocRoots:
-  - ../shared
+  - ..
 
 requireIntent: true
 
@@ -47,10 +53,11 @@ routing:
           - module.python: agency_tools.board.post_verdict
           - module.python: agency_tools.board.block
 
-      # Code Review. Her own Astra review of the PR head, in a worktree of her
-      # own that holds only that head and its gate records, then the gate's
-      # scarlett-review posts scarlett/review/<base>. That status is what lets
-      # the PR merge.
+      # Code Review. Her own clean make and Astra review of the PR head, in a
+      # worktree of her own that holds only that head and its gate records
+      # (her run token has no contents write, so she cannot push). On Astra
+      # "merge" the gate's scarlett-review posts scarlett/review/<base>, the
+      # status that lets the PR merge; on "do not merge", board.block.
       - name: code-review
         condition:
           equals: { field: taskType, value: code-review }
@@ -61,5 +68,5 @@ routing:
         identity:
           soul: true
         tools:
-          - module.python: agency_tools.board.comment
+          - module.python: agency_tools.board.read
           - module.python: agency_tools.board.block

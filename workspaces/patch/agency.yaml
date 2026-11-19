@@ -15,18 +15,20 @@
 #
 # Card moves happen only inside the board.* tools, which hold the only token
 # with Projects permission. Patch's own run token (the one `gh` and git use in
-# Bash) is minted without it, so `gh project item-edit` cannot move a card.
+# Bash) is minted with GITHUB_RUN_TOKEN_PERMISSIONS from agent.env, which has
+# no Projects permission, so `gh project item-edit` cannot move a card.
 #
 # Concurrency (MAX_CONCURRENT_RUNS) is a daemon setting, not a workspace one;
 # it lives in agent.env beside this file.
 #
 # Shared discipline (constitution, engineering loop, shipping, review core,
-# issue-writing guides) is NOT copied here. engineering-standards stamps its
-# shared/ directory as a sibling of the workspaces, and the templates pull it in
-# with {{system-doc:<file>}} through the root below.
+# issue-writing guides) is engineering-standards' shared/, vendored unedited
+# into workspaces/shared/ (`make vendor-shared`; `make` fails on drift). The
+# templates cite it with {{system-doc:shared/<file>}} through the root below,
+# engineering-standards' loading contract.
 
 systemDocRoots:
-  - ../shared
+  - ..
 
 # Every template opens with an `## Intent` block.
 requireIntent: true
@@ -53,8 +55,14 @@ routing:
         preRun:
           # One sweep step per live board. The board config lives here and
           # nowhere else: its project, the repos it covers, which agent and
-          # stage each column dispatches, run slots (which must equal
-          # MAX_CONCURRENT_RUNS in each agent.env), and who a block mentions.
+          # stage each column dispatches, how long a dispatch with no known
+          # outcome holds its slot (stall_minutes, longer than the stage rule's
+          # runTimeoutSecs plus queue wait), and run slots (which must equal
+          # MAX_CONCURRENT_RUNS in each agent.env). Who a block mentions is
+          # BOARD_NOTIFY_LOGIN in agent.env.
+          # Code Review has two turns per PR head: Scarlett (the reviewer)
+          # first; Patch once her scarlett/review/<base> status, posted by the
+          # sc0red-scarlett App, is green on the head.
           # Ready for Development is not a stage column: the owner moves cards
           # there and the sweep claims them into In Development.
           # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
@@ -71,15 +79,20 @@ routing:
                   - neurobloom-lilly/neurobloom-mcp
                   - neurobloom-lilly/neurobloom-website
                 stages:
-                  Planning: { agent: patch, task_type: plan }
-                  Plan Review: { agent: scarlett, task_type: plan-review }
-                  In Development: { agent: patch, task_type: build }
+                  Planning: { agent: patch, task_type: plan, stall_minutes: 120 }
+                  Plan Review: { agent: scarlett, task_type: plan-review, stall_minutes: 90 }
+                  In Development: { agent: patch, task_type: build, stall_minutes: 300 }
                   Code Review:
-                    - { agent: scarlett, task_type: code-review }
-                    - { agent: patch, task_type: code-review }
-                  Hotfix: { agent: patch, task_type: hotfix }
+                    agent: patch
+                    task_type: code-review
+                    stall_minutes: 240
+                    reviewer:
+                      agent: scarlett
+                      task_type: code-review
+                      status_app: sc0red-scarlett
+                      status: scarlett/review
+                  Hotfix: { agent: patch, task_type: hotfix, stall_minutes: 300 }
                 slots: { patch: 2, scarlett: 1 }
-                notify: ctcreel
           - name: stop
             tool: agency_tools.predicate.always_stop
             args:
@@ -122,9 +135,10 @@ routing:
           - module.python: agency_tools.board.open_for_review
           - module.python: agency_tools.board.block
 
-      # Code Review. CI failures and review threads are fixed in the same PR;
-      # when Scarlett's status is green on the head, merge through the gate,
-      # watch the deploy until the product works, then board.merged.
+      # Code Review, after Scarlett's status is green on the head (the sweep
+      # sends her each new head first). CI failures and review threads are
+      # fixed in the same PR; then merge through the gate, watch the deploy
+      # until the product works, then board.merged. board.block on failure.
       - name: code-review
         condition:
           equals: { field: taskType, value: code-review }
@@ -136,12 +150,12 @@ routing:
           soul: true
         tools:
           - module.python: agency_tools.board.read
-          - module.python: agency_tools.board.comment
           - module.python: agency_tools.board.merged
           - module.python: agency_tools.board.block
 
       # Hotfix. A fix against production plus the back-merge to the trunk.
-      # Ends in Code Review like a build.
+      # Ends in Code Review like a build. No stage rule can reach Ready for
+      # Development: no board tool makes that move.
       - name: hotfix
         condition:
           equals: { field: taskType, value: hotfix }
@@ -153,6 +167,5 @@ routing:
           soul: true
         tools:
           - module.python: agency_tools.board.read
-          - module.python: agency_tools.board.comment
           - module.python: agency_tools.board.open_for_review
           - module.python: agency_tools.board.block

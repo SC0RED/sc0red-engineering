@@ -15,15 +15,24 @@ Neither knows what this team's design promises, so this checks that:
 - each schedule rule ends its preRun in predicate.always_stop and grants no
   tools, so no LLM run is ever queued for it, and the board check runs
   board.sweep every two minutes;
+- every swept stage's stall_minutes outlasts its rule's runTimeoutSecs plus
+  queue wait, so the sweep never counts a live run as stalled;
 - the runner per agent (Patch claude-cli, Scarlett codex);
 - MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 1) agrees with each
   swept board's run slots;
+- each agent's run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no
+  Projects permission, so only the board tools move cards, and Scarlett's has
+  no contents write, so she cannot push;
+- Code Review dispatches Patch as the author and Scarlett as the reviewer,
+  whose status counts only from the sc0red-scarlett App;
 - every column a board sweep dispatches maps to a stage that has a rule, and
   Ready for Development is never a stage column (the owner moves cards there;
   the sweep only claims them out of it);
-- every template exists and opens with an `## Intent` block, and (with
-  --shared) every {{system-doc:...}} directive resolves against the
-  workspace or the engineering-standards shared/ directory.
+- every template exists and opens with an `## Intent` block, and every
+  {{system-doc:...}} directive resolves in the workspace or the vendored
+  workspaces/shared/, which holds exactly the docs the templates cite;
+- with --shared, each vendored doc is byte-identical to engineering-standards'
+  shared/ (the copy is never edited here).
 
 Usage:
     check_workspace.py --root <repo root> [--shared <engineering-standards/shared>]
@@ -51,16 +60,33 @@ SWEEP = "agency_tools.board.sweep"
 ALLOWLIST = {
     ("patch", "plan"): {"read", "submit_plan", "propose_split", "block"},
     ("patch", "build"): {"read", "open_for_review", "block"},
-    ("patch", "code-review"): {"read", "comment", "merged", "block"},
-    ("patch", "hotfix"): {"read", "comment", "open_for_review", "block"},
+    ("patch", "code-review"): {"read", "merged", "block"},
+    ("patch", "hotfix"): {"read", "open_for_review", "block"},
     ("scarlett", "plan-review"): {"read", "post_verdict", "block"},
-    ("scarlett", "code-review"): {"comment", "block"},
+    ("scarlett", "code-review"): {"read", "block"},
 }
 
 RUNNER = {"patch": "claude-cli", "scarlett": "codex"}
 CONCURRENCY = {"patch": 2, "scarlett": 1}
 BOARD_CHECK_CRON = "*/2 * * * *"
+# board.sweep's default; a stage's stall window must outlast its run timeout
+# plus time queued behind a full slot.
+DEFAULT_STALL_MINUTES = 240
+QUEUE_WAIT_SECS = 1800
 OWNER_COLUMNS = {"Ready for Development"}
+# Code Review: Patch authors, Scarlett reviews; her status counts only from her App.
+REVIEWED_COLUMN = "Code Review"
+AUTHOR = {"agent": "patch", "task_type": "code-review"}
+REVIEWER = {"agent": "scarlett", "task_type": "code-review", "status_app": "sc0red-scarlett",
+            "status": "scarlett/review"}
+TOKEN_APP = {"patch": "sc0red-patch", "scarlett": "sc0red-scarlett"}
+# Neither run token may move a card; Scarlett's may not push.
+FORBIDDEN_PERMISSIONS = {
+    "patch": {"organization_projects", "repository_projects"},
+    "scarlett": {"organization_projects", "repository_projects"},
+}
+READ_ONLY_PERMISSIONS = {"scarlett": {"contents"}}
+SHARED_PREFIX = "shared/"
 SYSTEM_DOC = re.compile(r"\{\{\s*system-doc:\s*([^}\s]+)\s*\}\}")
 
 
@@ -88,7 +114,7 @@ def read_env(path):
     return values
 
 
-def check_template(agent, ws, rule_name, template, shared, findings):
+def check_template(agent, ws, rule_name, template, cited, findings):
     path = os.path.join(ws, template or "")
     if not template or not os.path.isfile(path):
         findings.append(f"{agent}/{rule_name}: messageTemplate {template!r} does not exist")
@@ -96,27 +122,32 @@ def check_template(agent, ws, rule_name, template, shared, findings):
     text = open(path, encoding="utf-8").read()
     if not text.lstrip().startswith("## Intent"):
         findings.append(f"{agent}/{rule_name}: {template} does not open with an `## Intent` block")
-    if shared is None:
-        return
+    # systemDocRoots is [..]: a directive resolves in the workspace, then
+    # beside it (workspaces/shared/ for a shared/ path).
     for doc in SYSTEM_DOC.findall(text):
-        if not (os.path.isfile(os.path.join(ws, doc)) or os.path.isfile(os.path.join(shared, doc))):
-            findings.append(f"{agent}/{rule_name}: {{{{system-doc:{doc}}}}} resolves neither in the workspace nor in {shared}")
+        cited.add(doc)
+        if not (os.path.isfile(os.path.join(ws, doc)) or os.path.isfile(os.path.join(os.path.dirname(ws), doc))):
+            findings.append(f"{agent}/{rule_name}: {{{{system-doc:{doc}}}}} resolves neither in the workspace "
+                            f"nor in workspaces/{doc}")
 
 
-def check_agent(agent, ws, shared, findings):
+def check_agent(agent, ws, cited, findings):
     config_path = os.path.join(ws, "agency.yaml")
     if not os.path.isfile(config_path):
         findings.append(f"{agent}: {config_path} missing")
-        return set()
+        return {}
     config = yaml.safe_load(open(config_path, encoding="utf-8")) or {}
     runner = (config.get("runner") or {}).get("type")
     if runner != RUNNER[agent]:
         findings.append(f"{agent}: runner.type is {runner!r}, expected {RUNNER[agent]!r}")
     if not config.get("requireIntent"):
         findings.append(f"{agent}: requireIntent must be true")
+    if config.get("systemDocRoots") != [".."]:
+        findings.append(f"{agent}: systemDocRoots must be ['..'] (engineering-standards' loading contract), "
+                        f"got {config.get('systemDocRoots')!r}")
 
     routing = config.get("routing") or {}
-    stages = set()
+    stages = {}
     for group, body in routing.items():
         if group == "schedule":
             continue
@@ -129,8 +160,8 @@ def check_agent(agent, ws, shared, findings):
             if stage is None:
                 findings.append(f"{agent}/{name}: condition must be equals taskType")
                 continue
-            stages.add(stage)
             timeout = rule.get("runTimeoutSecs")
+            stages[stage] = timeout if isinstance(timeout, int) else None
             if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
                 findings.append(f"{agent}/{name}: runTimeoutSecs must be a positive integer, got {timeout!r}")
             pinned = ALLOWLIST.get((agent, stage))
@@ -147,7 +178,7 @@ def check_agent(agent, ws, shared, findings):
                         f"{agent}/{name}: allowlist {sorted(actual)} differs from the pinned {sorted(pinned)}")
             if rule.get("preRun") or rule.get("preRunTools"):
                 findings.append(f"{agent}/{name}: stage rules take no preRun")
-            check_template(agent, ws, name, rule.get("messageTemplate"), shared, findings)
+            check_template(agent, ws, name, rule.get("messageTemplate"), cited, findings)
 
     for (pinned_agent, pinned_stage) in ALLOWLIST:
         if pinned_agent == agent and pinned_stage not in stages:
@@ -168,7 +199,7 @@ def check_agent(agent, ws, shared, findings):
         for tool in declared:
             if tool != ALWAYS_STOP and not tool.startswith(BOARD):
                 findings.append(f"{agent}/{name}: preRun tool {tool} is outside {BOARD}*")
-        check_template(agent, ws, name, rule.get("messageTemplate"), shared, findings)
+        check_template(agent, ws, name, rule.get("messageTemplate"), cited, findings)
 
     if agent == "patch":
         board_check = [r for r in schedule_rules if r.get("name") == "board-check"]
@@ -187,9 +218,34 @@ def check_agent(agent, ws, shared, findings):
     runs = env.get("MAX_CONCURRENT_RUNS")
     if runs != str(CONCURRENCY[agent]):
         findings.append(f"{agent}: agent.env MAX_CONCURRENT_RUNS is {runs!r}, expected {CONCURRENCY[agent]}")
+    if not env.get("BOARD_NOTIFY_LOGIN"):
+        findings.append(f"{agent}: agent.env has no BOARD_NOTIFY_LOGIN, so a block would mention nobody")
     if env.get("AGENCY_AGENT_ID") != agent:
         findings.append(f"{agent}: agent.env AGENCY_AGENT_ID is {env.get('AGENCY_AGENT_ID')!r}, expected {agent!r}")
+    check_run_token(agent, env, findings)
     return stages
+
+
+def check_run_token(agent, env, findings):
+    if env.get("GITHUB_RUN_TOKEN_APP") != TOKEN_APP[agent]:
+        findings.append(f"{agent}: agent.env GITHUB_RUN_TOKEN_APP is {env.get('GITHUB_RUN_TOKEN_APP')!r}, "
+                        f"expected {TOKEN_APP[agent]!r}")
+    raw = env.get("GITHUB_RUN_TOKEN_PERMISSIONS")
+    if not raw:
+        findings.append(f"{agent}: agent.env has no GITHUB_RUN_TOKEN_PERMISSIONS, so the run token's scope is unstated")
+        return
+    permissions = {}
+    for item in raw.split(","):
+        name, _, level = item.strip().partition(":")
+        if level not in ("read", "write"):
+            findings.append(f"{agent}: GITHUB_RUN_TOKEN_PERMISSIONS entry {item.strip()!r} is not name:read|write")
+            continue
+        permissions[name] = level
+    for name in sorted(set(permissions) & FORBIDDEN_PERMISSIONS[agent]):
+        findings.append(f"{agent}: run token has {name}; only the board tools may move a card")
+    for name in sorted(READ_ONLY_PERMISSIONS.get(agent, set())):
+        if permissions.get(name) == "write":
+            findings.append(f"{agent}: run token has {name}:write; {agent} pushes nothing")
 
 
 def sweep_boards(root):
@@ -212,8 +268,6 @@ def check_boards(root, stages_by_agent, findings):
             findings.append(f"boards/{name}: project must be 'owner/number', got {board.get('project')!r}")
         if not board.get("repos"):
             findings.append(f"boards/{name}: lists no repos")
-        if not board.get("notify"):
-            findings.append(f"boards/{name}: no notify login, so a block would mention nobody")
         for agent, expected in CONCURRENCY.items():
             slots = (board.get("slots") or {}).get(agent)
             if slots != expected:
@@ -221,18 +275,65 @@ def check_boards(root, stages_by_agent, findings):
         for column, entries in (board.get("stages") or {}).items():
             if column in OWNER_COLUMNS:
                 findings.append(f"boards/{name}: {column} is the owner's move, never a stage column")
-            for entry in entries if isinstance(entries, list) else [entries]:
-                agent, stage = entry.get("agent"), entry.get("task_type")
-                if stage not in stages_by_agent.get(agent, set()):
+            if not isinstance(entries, dict):
+                findings.append(f"boards/{name}/{column}: a stage is one mapping (a second agent is its reviewer:), "
+                                f"got {type(entries).__name__}")
+                continue
+            reviewer = entries.get("reviewer")
+            if column == REVIEWED_COLUMN:
+                author = {k: entries.get(k) for k in AUTHOR}
+                if author != AUTHOR:
+                    findings.append(f"boards/{name}/{column}: the author must be {AUTHOR}, got {author}")
+                if not isinstance(reviewer, dict) or {k: reviewer.get(k, "scarlett/review" if k == "status" else None)
+                                                      for k in REVIEWER} != REVIEWER:
+                    findings.append(f"boards/{name}/{column}: the reviewer must be {REVIEWER}, got {reviewer!r}")
+            elif reviewer is not None:
+                findings.append(f"boards/{name}/{column}: only {REVIEWED_COLUMN} has a reviewer")
+            runs = [entries] + ([reviewer] if isinstance(reviewer, dict) else [])
+            longest = 0
+            for run_entry in runs:
+                agent, stage = run_entry.get("agent"), run_entry.get("task_type")
+                timeouts = stages_by_agent.get(agent, {})
+                if stage not in timeouts:
                     findings.append(f"boards/{name}/{column}: {agent} has no rule for stage {stage!r}")
+                    continue
+                longest = max(longest, timeouts[stage] or 0)
+            stall = entries.get("stall_minutes", DEFAULT_STALL_MINUTES)
+            if not isinstance(stall, int) or isinstance(stall, bool) or stall * 60 <= longest + QUEUE_WAIT_SECS:
+                findings.append(f"boards/{name}/{column}: stall_minutes {stall!r} must exceed the longest "
+                                f"runTimeoutSecs {longest} plus {QUEUE_WAIT_SECS}s of queue wait")
 
 
-def run(root, shared):
+def check_vendored(root, cited, upstream, findings):
+    """workspaces/shared/ holds exactly the shared/ docs the templates cite,
+    each unedited from engineering-standards (checked when upstream is given)."""
+    vendored_dir = os.path.join(root, "workspaces", "shared")
+    vendored = set()
+    if os.path.isdir(vendored_dir):
+        for dirpath, _, files in os.walk(vendored_dir):
+            for file in files:
+                vendored.add(os.path.relpath(os.path.join(dirpath, file), os.path.join(root, "workspaces")))
+    wanted = {doc for doc in cited if doc.startswith(SHARED_PREFIX)}
+    for doc in sorted(vendored - wanted):
+        findings.append(f"shared: workspaces/{doc} is vendored but no template cites it")
+    if upstream is None:
+        return
+    for doc in sorted(vendored & wanted):
+        source = os.path.join(upstream, doc[len(SHARED_PREFIX):])
+        if not os.path.isfile(source):
+            findings.append(f"shared: workspaces/{doc} is not in {upstream}")
+        elif open(source, "rb").read() != open(os.path.join(root, "workspaces", doc), "rb").read():
+            findings.append(f"shared: workspaces/{doc} differs from {source}; run `make vendor-shared`")
+
+
+def run(root, upstream):
     findings = []
     stages = {}
+    cited = set()
     for agent in RUNNER:
-        stages[agent] = check_agent(agent, os.path.join(root, "workspaces", agent), shared, findings)
+        stages[agent] = check_agent(agent, os.path.join(root, "workspaces", agent), cited, findings)
     check_boards(root, stages, findings)
+    check_vendored(root, cited, upstream, findings)
     return findings
 
 
@@ -275,7 +376,8 @@ def self_test(repo_root):
         ("missing stage", "scarlett", lambda c: c["routing"]["internal"]["rules"].pop(), "no routing.internal rule"),
     ]
     failures = []
-    with tempfile.TemporaryDirectory() as scratch:
+    # Scratch under the repo (gitignored .validate.*/), never the boot disk.
+    with tempfile.TemporaryDirectory(prefix=".validate.selftest.", dir=repo_root) as scratch:
         base = os.path.join(scratch, "base")
         shutil.copytree(os.path.join(repo_root, "workspaces"), os.path.join(base, "workspaces"))
         clean = run(base, None)
@@ -291,7 +393,8 @@ def self_test(repo_root):
         # File-level cases.
         root = os.path.join(scratch, "concurrency")
         shutil.copytree(base, root)
-        _write(os.path.join(root, "workspaces", "patch", "agent.env"), "AGENCY_AGENT_ID=patch\nMAX_CONCURRENT_RUNS=4\n")
+        _write(os.path.join(root, "workspaces", "patch", "agent.env"),
+               "AGENCY_AGENT_ID=patch\nMAX_CONCURRENT_RUNS=4\nBOARD_NOTIFY_LOGIN=x\n")
         if not any("MAX_CONCURRENT_RUNS" in f for f in run(root, None)):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
         root = os.path.join(scratch, "owner-column")
@@ -310,22 +413,72 @@ def self_test(repo_root):
                 ["slots"].__setitem__("scarlett", 3))
         if not any("slots.scarlett" in f for f in run(root, None)):
             failures.append("slots: a board's run slots disagreeing with agent.env not flagged")
+        root = os.path.join(scratch, "stall")
+        shutil.copytree(base, root)
+        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
+                ["stages"]["In Development"].__setitem__("stall_minutes", 60))
+        if not any("stall_minutes" in f for f in run(root, None)):
+            failures.append("stall: a stall window shorter than the run timeout not flagged")
+        root = os.path.join(scratch, "reviewer-app")
+        shutil.copytree(base, root)
+        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
+                ["stages"]["Code Review"]["reviewer"].__setitem__("status_app", "sc0red-patch"))
+        if not any("the reviewer must be" in f for f in run(root, None)):
+            failures.append("reviewer-app: a reviewer status from another App not flagged")
+        root = os.path.join(scratch, "stage-list")
+        shutil.copytree(base, root)
+        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
+                ["stages"].__setitem__("Code Review", [{"agent": "patch", "task_type": "code-review"}]))
+        if not any("one mapping" in f for f in run(root, None)):
+            failures.append("stage-list: a list of agents for one column not flagged")
+        root = os.path.join(scratch, "code-review-stall")
+        shutil.copytree(base, root)
+        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
+                ["stages"]["Code Review"].__setitem__("stall_minutes", 140))
+        if not any("stall_minutes" in f for f in run(root, None)):
+            failures.append("code-review-stall: a stall window shorter than the author's run timeout not flagged")
+        for label, agent, permissions, expect in [
+            ("projects-token", "patch", "contents:write,organization_projects:write", "organization_projects"),
+            ("scarlett-push", "scarlett", "contents:write,issues:write", "contents:write"),
+        ]:
+            root = os.path.join(scratch, label)
+            shutil.copytree(base, root)
+            path = os.path.join(root, "workspaces", agent, "agent.env")
+            env = open(path, encoding="utf-8").read()
+            env = re.sub(r"(?m)^GITHUB_RUN_TOKEN_PERMISSIONS=.*$", f"GITHUB_RUN_TOKEN_PERMISSIONS={permissions}", env)
+            _write(path, env)
+            if not any(expect in f for f in run(root, None)):
+                failures.append(f"{label}: run token permissions {permissions!r} not flagged")
         root = os.path.join(scratch, "intent")
         shutil.copytree(base, root)
         _write(os.path.join(root, "workspaces", "scarlett", "templates", "plan-review.md"), "no intent\n")
         if not any("## Intent" in f for f in run(root, None)):
             failures.append("intent: a template without `## Intent` not flagged")
-        shared = os.path.join(scratch, "empty-shared")
-        os.makedirs(shared)
-        if not any("system-doc" in f for f in run(base, shared)):
-            failures.append("system-doc: unresolvable directive not flagged")
+        root = os.path.join(scratch, "unvendored")
+        shutil.copytree(base, root)
+        os.remove(os.path.join(root, "workspaces", "shared", "constitution.md"))
+        if not any("system-doc:shared/constitution.md" in f for f in run(root, None)):
+            failures.append("unvendored: a directive with no vendored doc not flagged")
+        root = os.path.join(scratch, "stray")
+        shutil.copytree(base, root)
+        _write(os.path.join(root, "workspaces", "shared", "jira-write-auth.md"), "stray\n")
+        if not any("no template cites" in f for f in run(root, None)):
+            failures.append("stray: a vendored doc no template cites not flagged")
+        upstream = os.path.join(scratch, "upstream")
+        shutil.copytree(os.path.join(base, "workspaces", "shared"), upstream)
+        if run(base, upstream):
+            failures.append("drift: an unedited vendored copy is flagged: " + "; ".join(run(base, upstream)))
+        with open(os.path.join(upstream, "shipping.md"), "a", encoding="utf-8") as handle:
+            handle.write("\nupstream moved on\n")
+        if not any("differs from" in f for f in run(base, upstream)):
+            failures.append("drift: a vendored doc that differs from engineering-standards not flagged")
     return failures
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    parser.add_argument("--shared", help="engineering-standards shared/ directory, to resolve system-doc directives")
+    parser.add_argument("--shared", help="engineering-standards shared/ directory the vendored copy must match")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
