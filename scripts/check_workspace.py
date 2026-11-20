@@ -27,7 +27,10 @@ Neither knows what this team's design promises, so this checks that:
   outside agency_tools.board.* any stage holds), and only Scarlett's workspace
   names it or scarlett-review, the hook it runs to post her
   status with her App key, so Patch never runs it;
-- one routing.internal rule per stage;
+- one routing.internal rule per stage, each running at most one job per card
+  (singleFlightKey '{{ repo }}#{{ issue }}', fail closed, a lock TTL that
+  outlasts runTimeoutSecs plus queue wait), and each agent.env names its own
+  Redis database in REDIS_URL;
 - Code Review dispatches Patch as the author and Scarlett as the reviewer,
   whose status counts only from the sc0red-scarlett App;
 - each board.sweep step names a board in Patch's boards.json (the one config
@@ -87,6 +90,9 @@ BOARD_CHECK_CRON = "*/2 * * * *"
 # plus time queued behind a full slot.
 DEFAULT_STALL_MINUTES = 240
 QUEUE_WAIT_SECS = 1800
+# Every stage rule runs at most one job per card (board.open_for_review's
+# registration relies on one writer per card).
+SINGLE_FLIGHT_KEY = "{{ repo }}#{{ issue }}"
 OWNER_COLUMNS = {"Ready for Development"}
 # Code Review: Patch authors, Scarlett reviews; her status counts only from her App.
 REVIEWED_COLUMN = "Code Review"
@@ -202,6 +208,7 @@ def check_agent(agent, ws, cited, findings):
             stages[stage] = timeout if isinstance(timeout, int) else None
             if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
                 findings.append(f"{agent}/{name}: runTimeoutSecs must be a positive integer, got {timeout!r}")
+            check_single_flight(agent, name, rule, stages[stage], findings)
             pinned = ALLOWLIST.get((agent, stage))
             granted = tool_names(rule.get("tools"))
             outside = [t for t in granted if not t.startswith(BOARD)]
@@ -262,9 +269,31 @@ def check_agent(agent, ws, cited, findings):
         findings.append(f"{agent}: agent.env has no BOARD_NOTIFY_LOGIN, so a block would mention nobody")
     if env.get("AGENCY_AGENT_ID") != agent:
         findings.append(f"{agent}: agent.env AGENCY_AGENT_ID is {env.get('AGENCY_AGENT_ID')!r}, expected {agent!r}")
+    redis = env.get("REDIS_URL") or ""
+    if not re.fullmatch(r"redis://[^/\s]+/\d+", redis):
+        findings.append(f"{agent}: agent.env REDIS_URL must name the agent's own Redis database "
+                        f"(redis://host:port/<db>), got {redis!r}; the single-flight locks live there")
     check_run_token(agent, env, findings)
     check_review_poster(agent, ws, findings)
     return stages
+
+
+def check_single_flight(agent, name, rule, timeout, findings):
+    """One job per card per stage: a second dispatch for the card coalesces
+    behind the live run, the lock outlasts the run and its queue wait, and a
+    dispatch the gate cannot check is held, never run beside a live one."""
+    key = rule.get("singleFlightKey")
+    if key != SINGLE_FLIGHT_KEY:
+        findings.append(f"{agent}/{name}: singleFlightKey must be {SINGLE_FLIGHT_KEY!r} (one job per card), "
+                        f"got {key!r}")
+    if rule.get("singleFlightFailClosed") is not True:
+        findings.append(f"{agent}/{name}: singleFlightFailClosed must be true, so a dispatch the gate cannot "
+                        f"check is held instead of run beside a live one")
+    ttl = rule.get("singleFlightTtlSecs")
+    floor = (timeout or 0) + QUEUE_WAIT_SECS
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < floor:
+        findings.append(f"{agent}/{name}: singleFlightTtlSecs {ttl!r} must be at least runTimeoutSecs plus "
+                        f"{QUEUE_WAIT_SECS}s of queue wait ({floor}), or the lock lapses under a live run")
 
 
 def check_run_token(agent, env, findings):
@@ -440,6 +469,12 @@ def run(root, upstream):
     cited = set()
     for agent in RUNNER:
         stages[agent] = check_agent(agent, os.path.join(root, "workspaces", agent), cited, findings)
+    # Agency's Redis keys (the run-concurrency gate, single-flight locks) are
+    # not namespaced by agent: two agents on one database share them.
+    redis = {agent: read_env(os.path.join(root, "workspaces", agent, "agent.env")).get("REDIS_URL")
+             for agent in RUNNER}
+    if len(set(redis.values())) != len(redis):
+        findings.append(f"agent.env: REDIS_URL must differ per agent, got {redis}")
     check_boards(root, stages, findings)
     check_vendored(root, cited, upstream, findings)
     return findings
@@ -475,6 +510,14 @@ def self_test(repo_root):
 
     cases = [
         ("missing timeout", "patch", lambda c: internal(c, "build").pop("runTimeoutSecs"), "runTimeoutSecs"),
+        ("no single flight", "patch", lambda c: internal(c, "hotfix").pop("singleFlightKey"),
+         "singleFlightKey must be"),
+        ("single flight per repo", "scarlett", lambda c: internal(c, "code-review").__setitem__(
+            "singleFlightKey", "{{ repo }}"), "singleFlightKey must be"),
+        ("single flight fails open", "patch", lambda c: internal(c, "build").pop("singleFlightFailClosed"),
+         "singleFlightFailClosed must be true"),
+        ("single flight lapses", "patch", lambda c: internal(c, "build").__setitem__(
+            "singleFlightTtlSecs", 600), "singleFlightTtlSecs 600"),
         ("extra board move", "patch", lambda c: internal(c, "plan")["tools"].append(
             {"module.python": "agency_tools.board.merged"}), "differs from the pinned"),
         ("non-board tool", "scarlett", lambda c: internal(c, "plan-review")["tools"].append(
@@ -519,6 +562,19 @@ def self_test(repo_root):
                "AGENCY_AGENT_ID=patch\nMAX_CONCURRENT_RUNS=4\nBOARD_NOTIFY_LOGIN=x\n")
         if not any("MAX_CONCURRENT_RUNS" in f for f in run(root, None)):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
+        for label, agent, edit, expect in [
+            ("no-redis", "patch", lambda text: re.sub(r"(?m)^REDIS_URL=.*\n", "", text), "REDIS_URL must name"),
+            ("shared-redis", "scarlett", lambda text: re.sub(r"(?m)^REDIS_URL=.*$",
+                                                             "REDIS_URL=redis://127.0.0.1:6379/1", text),
+             "REDIS_URL must differ per agent"),
+        ]:
+            root = os.path.join(scratch, label)
+            shutil.copytree(base, root)
+            path = os.path.join(root, "workspaces", agent, "agent.env")
+            _write(path, edit(open(path, encoding="utf-8").read()))
+            found = run(root, None)
+            if not any(expect in f for f in found):
+                failures.append(f"{label}: expected a finding containing {expect!r}, got {found}")
         def sweep_arg(name):
             return lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"].__setitem__("board", name)
 

@@ -49,7 +49,7 @@ This run covers the Editor and Verify beats of the engineering loop, and shippin
 
 ## 1. Read where things stand
 
-Call `board_read` with `project`, `repo` and `issue` for the card's fields, and read the issue, the approved plan comment and any linked branch or PR with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. On a rerun, continue the existing branch and PR. Never open a second PR for the card.
+Call `board_read` with `project`, `repo` and `issue` for the card's fields. If the card is no longer in the Column above, the board moved on without this run (the owner moved it, or this dispatch waited behind an earlier run for the card): stop, writing nothing. Read the issue, the approved plan comment and any linked branch or PR with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. On a rerun, continue the existing branch and PR. Never open a second PR for the card.
 
 ## 2. Worktree
 

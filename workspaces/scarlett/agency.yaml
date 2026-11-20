@@ -47,6 +47,9 @@ routing:
         deliverable: decision
         risk: low
         runTimeoutSecs: 1800
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 3600
+        singleFlightFailClosed: true
         identity:
           soul: true
         tools:
@@ -70,6 +73,9 @@ routing:
         deliverable: decision
         risk: medium
         runTimeoutSecs: 5400
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 7200
+        singleFlightFailClosed: true
         identity:
           soul: true
         tools:

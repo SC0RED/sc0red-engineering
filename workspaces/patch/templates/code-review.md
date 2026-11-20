@@ -37,7 +37,7 @@ You are Patch, and this run is the code-review stage. No person approves the PR.
 
 ## 1. Read where things stand
 
-Call `board_read` with `project`, `repo` and `issue`, read the issue and the approved plan with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`, then read the PR with `gh pr view <pr> --repo {{ repo | default("") }} --json state,mergeable,mergeStateStatus,statusCheckRollup,headRefOid,baseRefName,reviewDecision`, and its review threads. If the PR is already merged, go to step 4; on a hotfix card, only once the companion is merged too, and until then the open companion is `<pr>` for steps 2 and 3.
+Call `board_read` with `project`, `repo` and `issue`. If the card is no longer in the Column above, the board moved on without this run (the owner moved it, or this dispatch waited behind an earlier run for the card): stop, writing nothing. Read the issue and the approved plan with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`, then read the PR with `gh pr view <pr> --repo {{ repo | default("") }} --json state,mergeable,mergeStateStatus,statusCheckRollup,headRefOid,baseRefName,reviewDecision`, and its review threads. If the PR is already merged, go to step 4; on a hotfix card, only once the companion is merged too, and until then the open companion is `<pr>` for steps 2 and 3.
 
 ## 2. Make it ready
 

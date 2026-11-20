@@ -45,7 +45,7 @@ Judge against the review core's axes and verdict shape, the constitution, and th
 
 ## 1. Read
 
-Call `board_read` with `project`, `repo` and `issue` for the card's fields, and read the issue and Patch's plan comment with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. Review the plan comment as it is now. If the owner edited it, review the edit. If there is no plan comment, call `board_block` naming that and stop.
+Call `board_read` with `project`, `repo` and `issue` for the card's fields. If the card is no longer in the Column above, the board moved on without this run (the owner moved it, or this dispatch waited behind an earlier run for the card): stop, writing nothing. Read the issue and Patch's plan comment with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. Review the plan comment as it is now. If the owner edited it, review the edit. If there is no plan comment, call `board_block` naming that and stop.
 
 ## 2. Check it against the code
 

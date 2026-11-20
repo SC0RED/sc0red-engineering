@@ -13,6 +13,14 @@
 # reported as failed; the sweep re-dispatches it once and then blocks the card
 # with the reason and the log tail.
 #
+# Every stage rule also runs at most one job per card: singleFlightKey
+# '{{ repo }}#{{ issue }}', a lock TTL of runTimeoutSecs plus the sweep's
+# queue wait, and singleFlightFailClosed, so a dispatch the gate cannot check
+# (Redis down) is held and redelivered, never run beside a live one. A
+# dispatch that coalesces runs once the live job ends; its template stops when
+# the card has left the column it was dispatched for. The daemon's REDIS_URL
+# (agent.env) is required.
+#
 # Card moves happen only inside the board.* tools, which hold the only token
 # with Projects permission. Patch's own run token (the one `gh` and git use in
 # Bash) is minted with GITHUB_RUN_TOKEN_PERMISSIONS from agent.env, which has
@@ -75,7 +83,10 @@ routing:
           # recovered beside the loop. Only one Patch daemon may run this
           # workspace. The sweep re-reads each card around every write, which
           # narrows but does not close a race between two overlapping passes:
-          # they can dispatch the same card twice.
+          # they can dispatch the same card twice. The stage rules close it:
+          # each has singleFlightKey '{{ repo }}#{{ issue }}', so a second
+          # dispatch for a card coalesces behind the live run (one writer per
+          # card, which board.open_for_review's registration relies on).
           # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
           # joins with its own step after NeuroBloom has run end to end.
           - name: sweepNeurobloom
@@ -99,6 +110,9 @@ routing:
         deliverable: action
         risk: low
         runTimeoutSecs: 2700
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 4500
+        singleFlightFailClosed: true
         identity:
           soul: true
         tools:
@@ -117,6 +131,9 @@ routing:
         deliverable: action
         risk: medium
         runTimeoutSecs: 10800
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 12600
+        singleFlightFailClosed: true
         identity:
           soul: true
         tools:
@@ -135,6 +152,9 @@ routing:
         deliverable: action
         risk: medium
         runTimeoutSecs: 7200
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 9000
+        singleFlightFailClosed: true
         identity:
           soul: true
         tools:
@@ -152,6 +172,9 @@ routing:
         deliverable: action
         risk: high
         runTimeoutSecs: 10800
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 12600
+        singleFlightFailClosed: true
         identity:
           soul: true
         tools:

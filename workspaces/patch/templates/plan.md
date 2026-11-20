@@ -59,7 +59,7 @@ Your standard is the constitution and the engineering loop below. This run is th
 
 ## 1. Read where things stand
 
-Call `board_read` with `project`, `repo` and `issue` for the card's column and fields, and read the issue and its comments with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. Your plan comment, if one exists, is the one `board_submit_plan` wrote. A rerun (attempt above 1) or a revision after Scarlett's `changes_requested` starts from what is already there:
+Call `board_read` with `project`, `repo` and `issue` for the card's column and fields. If the card is no longer in the Column above, the board moved on without this run (the owner moved it, or this dispatch waited behind an earlier run for the card): stop, writing nothing. Read the issue and its comments with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. Your plan comment, if one exists, is the one `board_submit_plan` wrote. A rerun (attempt above 1) or a revision after Scarlett's `changes_requested` starts from what is already there:
 - If your plan comment exists and Scarlett's latest verdict asks for changes, revise that plan in place to address each point. Never post a second, competing plan.
 - If your plan comment exists and has no verdict after it, a previous run died after writing it. Finish from there.
 
