@@ -13,8 +13,8 @@
 # picks up the new release.
 #
 # Releases are immutable and kept while current or previous, and for 7 days
-# after they were built (scripts/sync_agency_tools.sh), so restart a daemon
-# within a week of a newer release going live.
+# after they were last either (scripts/sync_agency_tools.sh), so restart a
+# daemon within a week of its release leaving current and previous.
 set -euo pipefail
 
 RUNTIME=${AGENCY_RUNTIME_DIR:-/Volumes/SSD/agency-runtime}

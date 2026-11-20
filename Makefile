@@ -59,14 +59,19 @@ sync-tools: ## Run the agency-tools sync job now (after install-sync)
 	@launchctl print "gui/$$(id -u)/$(SYNC_LABEL)" >/dev/null 2>&1 || { echo "sync-tools: $(SYNC_LABEL) is not loaded; run make install-sync"; exit 1; }
 	@launchctl kickstart -p "gui/$$(id -u)/$(SYNC_LABEL)" && echo "sync-tools: started; see $(AGENCY_RUNTIME_DIR)/sync.log"
 
-# Render the launchd job (every 10 minutes and at load) and (re)load it. PATH
-# is the directories of the gh, uv, git and python3 this shell resolves.
-install-sync: ## Install + load the launchd job that runs the sync
+# Copy the sync script and the daemon launcher into $(AGENCY_RUNTIME_DIR)/bin
+# (each replaced by a rename, so a run never reads a half-copied file), then
+# render the launchd job (every 10 minutes and at load) against that copy and
+# (re)load it: the job never depends on this checkout. Rerun after changing
+# either script. PATH is the directories of the gh, uv, git and python3 this
+# shell resolves.
+install-sync: ## Install the scripts + load the launchd job that runs the sync
 	@for tool in gh uv git python3; do command -v $$tool >/dev/null || { echo "install-sync: no $$tool on PATH"; exit 1; }; done; \
 	path=$$(for tool in gh uv git python3; do dirname "$$(command -v $$tool)"; done | awk '!seen[$$0]++' | paste -sd: -):/usr/bin:/bin; \
-	mkdir -p "$(AGENCY_RUNTIME_DIR)" "$(dir $(SYNC_PLIST))" || exit 1; \
+	mkdir -p "$(AGENCY_RUNTIME_DIR)/bin" "$(dir $(SYNC_PLIST))" || exit 1; \
+	install -S -m 0755 scripts/sync_agency_tools.sh scripts/run_on_release.sh "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
 	new="$(SYNC_PLIST).new"; trap 'rm -f "$$new"' EXIT; \
-	sed -e "s|@SCRIPT@|$(CURDIR)/scripts/sync_agency_tools.sh|g" -e "s|@RUNTIME@|$(AGENCY_RUNTIME_DIR)|g" \
+	sed -e "s|@SCRIPT@|$(AGENCY_RUNTIME_DIR)/bin/sync_agency_tools.sh|g" -e "s|@RUNTIME@|$(AGENCY_RUNTIME_DIR)|g" \
 		-e "s|@PATH@|$$path|g" launchd/$(SYNC_LABEL).plist > "$$new" || exit 1; \
 	plutil -lint -s "$$new" || { echo "install-sync: rendered plist is invalid; nothing loaded"; exit 1; }; \
 	mv "$$new" "$(SYNC_PLIST)" || exit 1; \

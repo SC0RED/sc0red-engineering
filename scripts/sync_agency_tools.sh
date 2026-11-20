@@ -15,14 +15,16 @@
 #   agency-tools.git/          bare clone of SC0RED/agency-tools
 #   releases/<at_sha>-<agency_sha12>/agency-tools/   detached worktree + .venv
 #   releases/<...>/contracts/  the run's contracts
-#   releases/<...>/.complete   written last; a release with it is never touched
+#   releases/<...>/.complete   written last; a release with it is never changed
 #   current -> releases/<...>  swapped atomically once the release is verified
-#   state/                     run id installed, previous release
+#   state/                     run id installed, previous release, and
+#                              in-use/<name>: when each release was last in use
 #
 # Releases are immutable. Each is built in releases/.build.*, marked complete,
 # then renamed into place, so a release under releases/<name> is always whole
 # and an existing one is reused, never rebuilt. A release is deleted only when
-# it is neither current nor previous and was built over 7 days ago.
+# it is neither current nor previous and both its build and its last time in
+# use (current or previous) are over 7 days ago.
 #
 # A daemon never reads `current` after it starts: scripts/run_on_release.sh
 # resolves it once, at spawn, to the real release path.
@@ -30,8 +32,10 @@
 # Nothing here is copied by hand: the tools are a git worktree at the exact
 # sha, the Python env is `uv sync --frozen` from its uv.lock (non-editable, so
 # the env holds no path into the build directory), and the contracts are the
-# run's own, checked against its SHA256SUMS. If any step fails, or the release
-# does not import, `current` is left as it was and the script exits 1.
+# run's own, checked against its SHA256SUMS. If any step before the swap fails,
+# or the release does not import, `current` is left as it was and the script
+# exits 1. A failure after the swap (recording the run id, pruning) exits 1
+# with the new release already current and whole.
 set -euo pipefail
 umask 022
 
@@ -153,29 +157,52 @@ head=$(git -C "$release/agency-tools" rev-parse HEAD 2>/dev/null || true)
 [ "$head" = "$at_sha" ] || die "release $name is at '$head', not $at_sha"
 verify "$release" || die "release $name cannot import one of: $VERIFY_MODULES"
 
-# Swap: one rename of a symlink, so a reader sees the old release or the new.
+# A release's retention runs from the last time it was in use (current or
+# previous), not from its build: a daemon started on an old build keeps it for
+# $KEEP_DAYS days after it stops being current or previous. state/in-use/<name>
+# is touched for every release in use just before the swap, so an
+# interrupted swap never leaves one unprotected.
+mark_in_use() {
+  local rel
+  mkdir -p "$RUNTIME/state/in-use"
+  for rel in "$@"; do
+    [ -n "$rel" ] && touch "$RUNTIME/state/in-use/${rel#releases/}"
+  done
+  return 0
+}
+
+# Swap: previous is written first, then one rename of a symlink, so a reader
+# sees the old release or the new, and the old current is protected before
+# it stops being current.
 if [ "$current_rel" != "releases/$name" ]; then
-  ln -sfn "releases/$name" "$RUNTIME/.current.new"
-  python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$RUNTIME/.current.new" "$RUNTIME/current"
+  mark_in_use "$previous_rel" "$current_rel" "releases/$name"
   if [ -n "$current_rel" ]; then
-    echo "$current_rel" > "$RUNTIME/state/previous"
+    echo "$current_rel" > "$RUNTIME/state/previous.new"
+    mv "$RUNTIME/state/previous.new" "$RUNTIME/state/previous"
     previous_rel=$current_rel
   fi
+  ln -sfn "releases/$name" "$RUNTIME/.current.new"
+  python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$RUNTIME/.current.new" "$RUNTIME/current"
   log "installed run $run_id: agency-tools $at_sha, Agency $agency_sha (was ${current_rel:-nothing})"
 else
   log "run $run_id is release $name, already current"
 fi
 echo "$run_id" > "$RUNTIME/state/run-id"
 
-# Delete a release only when it is neither current nor previous and was built
-# more than $KEEP_DAYS days ago.
+# Delete a release only when it is neither current nor previous, and neither
+# its build nor its last time in use is within $KEEP_DAYS days. A directory
+# without .complete was never a finished release and goes now.
+keep_minutes=$((KEEP_DAYS * 24 * 60))
+recent() { [ -e "$1" ] && [ -z "$(find "$1" -mmin +$keep_minutes)" ]; }
 for old in "$releases"/*; do
   [ -d "$old" ] || continue
-  rel="releases/$(basename "$old")"
+  base=$(basename "$old")
+  rel="releases/$base"
   case "$rel" in "releases/$name" | "$previous_rel") continue ;; esac
-  if complete "$old" && [ -z "$(find "$old/.complete" -mmin +$((KEEP_DAYS * 24 * 60)))" ]; then
+  if complete "$old" && { recent "$old/.complete" || recent "$RUNTIME/state/in-use/$base"; }; then
     continue
   fi
+  rm -f "$RUNTIME/state/in-use/$base"
   git -C "$bare" worktree remove --force "$old/agency-tools" 2>/dev/null || true
   rm -rf "$old"
   log "removed $rel"

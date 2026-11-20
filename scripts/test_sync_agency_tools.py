@@ -157,10 +157,15 @@ class SyncTest(unittest.TestCase):
     def listing(self):
         return sorted(os.listdir(self.releases))
 
-    def age(self, name, days):
-        marker = os.path.join(self.releases, name, ".complete")
-        past = time.time() - days * DAY
-        os.utime(marker, (past, past))
+    def age(self, name, days, in_use_days=None):
+        """Backdate a release's build to `days` ago and its last time in use
+        (current or previous) to `in_use_days` ago (default: the same)."""
+        build = time.time() - days * DAY
+        os.utime(os.path.join(self.releases, name, ".complete"), (build, build))
+        used = time.time() - (days if in_use_days is None else in_use_days) * DAY
+        marker = os.path.join(self.runtime, "state", "in-use", name)
+        if os.path.exists(marker):
+            os.utime(marker, (used, used))
 
     # --- install ------------------------------------------------------------
 
@@ -245,10 +250,16 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.listing(), sorted([r1, r2, r3]))
         self.assertEqual(self.current(), f"releases/{r3}")
         self.assertEqual(self.head(), self.sha1)
-        # Built over 7 days ago: once 104 is current and 103 previous, 101 and 102 go.
+        # Built and last in use over 7 days ago: once 104 is current and 103
+        # previous, 101 goes. 102 was previous until this sync, so it stays
+        # 7 more days, however old its build.
         self.age(r1, 8)
         self.age(r2, 8)
         self.synced(104)
+        self.assertEqual(self.listing(), sorted([r2, r3, r4]))
+        self.age(r2, 8)
+        self.artifact(105, self.sha2, agency_sha="e" * 40)
+        self.synced(105)
         self.assertEqual(self.listing(), sorted([r3, r4]))
         self.assertEqual(read(os.path.join(self.runtime, "state", "previous")).strip(), f"releases/{r3}")
         worktrees = git("worktree", "list", cwd=os.path.join(self.runtime, "agency-tools.git"))
@@ -266,6 +277,55 @@ class SyncTest(unittest.TestCase):
         self.age(r2, 30)
         self.synced(103)
         self.assertEqual(self.listing(), sorted([r1, r2]))
+
+    def test_an_old_build_in_use_lately_is_kept_for_7_days_after(self):
+        # Built 20 days ago, current until today: a daemon started on it
+        # yesterday keeps its release through two swaps in a row.
+        self.artifact(101, self.sha1)
+        self.artifact(102, self.sha2, agency_sha="c" * 40)
+        self.artifact(103, self.sha1, agency_sha="d" * 40)
+        r1, r2, r3 = (f"{self.sha1}-{'a' * 12}", f"{self.sha2}-{'c' * 12}", f"{self.sha1}-{'d' * 12}")
+        self.synced(101)
+        self.age(r1, 20, in_use_days=0)
+        self.synced(102)
+        self.synced(103)
+        self.assertEqual(self.listing(), sorted([r1, r2, r3]))
+        # Seven days after it was last current or previous, it goes.
+        self.age(r1, 20, in_use_days=8)
+        self.artifact(104, self.sha2, agency_sha="e" * 40)
+        self.synced(104)
+        self.assertNotIn(r1, self.listing())
+        self.assertFalse(os.path.exists(os.path.join(self.runtime, "state", "in-use", r1)))
+
+    def test_previous_is_recorded_before_current_swaps(self):
+        # An interrupted swap (killed between the two writes) must never leave
+        # the old current unprotected: previous is written first.
+        self.artifact(101, self.sha1)
+        self.artifact(102, self.sha2, agency_sha="c" * 40)
+        self.synced(101)
+        r1 = f"{self.sha1}-{'a' * 12}"
+        stop = os.path.join(self.tmp, "stop-python")
+        os.makedirs(stop)
+        with open(os.path.join(stop, "python3"), "w") as f:
+            f.write("#!/bin/sh\ncase \"$2\" in *os.replace*) exit 1;; esac\nexec "
+                    f"{sys.executable} \"$@\"\n")
+        os.chmod(os.path.join(stop, "python3"), 0o755)
+        done = self.sync(102, PATH=f"{stop}:{self.env['PATH']}")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(self.current(), f"releases/{r1}")
+        self.assertEqual(read(os.path.join(self.runtime, "state", "previous")).strip(), f"releases/{r1}")
+        self.assertTrue(os.path.exists(os.path.join(self.runtime, "state", "in-use", r1)))
+
+    def test_an_incomplete_current_is_refused_not_rebuilt(self):
+        self.artifact(101, self.sha1)
+        self.synced(101)
+        name = f"{self.sha1}-{'a' * 12}"
+        os.remove(os.path.join(self.releases, name, ".complete"))
+        self.artifact(102, self.sha1)
+        done = self.sync(102)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(f"release {name} is current or previous but not complete", done.stdout + done.stderr)
+        self.assertTrue(os.path.isdir(os.path.join(self.releases, name, "agency-tools")))
 
     # --- refusals: current is never touched ----------------------------------
 
