@@ -582,9 +582,11 @@ def self_test(repo_root):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
         for label, agent, edit, expect in [
             ("no-redis", "patch", lambda text: re.sub(r"(?m)^REDIS_URL=.*\n", "", text), "REDIS_URL must be"),
-            ("shared-redis", "scarlett", lambda text: re.sub(r"(?m)^REDIS_URL=.*$",
-                                                             "REDIS_URL=redis://127.0.0.1:6379/1", text),
-             "a different database per agent"),
+            # Scarlett on Patch's database, whichever that is.
+            ("shared-redis", "scarlett", lambda text: re.sub(
+                r"(?m)^REDIS_URL=.*$",
+                "REDIS_URL=" + read_env(os.path.join(base, "workspaces", "patch", "agent.env"))["REDIS_URL"],
+                text), "a different database per agent"),
             *[(f"redis-spelling-{i}", "scarlett",
                (lambda url: lambda text: re.sub(r"(?m)^REDIS_URL=.*$", f"REDIS_URL={url}", text))(url),
                "REDIS_URL must be")

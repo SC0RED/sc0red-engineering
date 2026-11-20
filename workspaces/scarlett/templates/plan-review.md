@@ -45,7 +45,7 @@ Judge against the review core's axes and verdict shape, the constitution, and th
 
 ## 1. Read
 
-Call `board_read` with `project`, `repo` and `issue` for the card's fields. If the card is no longer in the Column above, the board moved on without this run (the owner moved it, or this dispatch waited behind an earlier run for the card): stop, writing nothing. Read the issue and Patch's plan comment with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`. If your verdict comment is newer than the plan comment's last edit, you already judged this plan as it is: stop, writing nothing (a repeated dispatch never overturns a verdict). Review the plan comment as it is now. If the owner edited it, review the edit. If there is no plan comment, call `board_block` naming that and stop.
+Call `board_read` with `project`, `repo` and `issue` for the card's fields. If the card is no longer in the Column above, the board moved on without this run (the owner moved it, or this dispatch waited behind an earlier run for the card): stop, writing nothing. Read the issue and Patch's plan comment with `gh issue view {{ issue | default("") }} --repo {{ repo | default("") }} --comments`, and the plan comment's revision, its `id` and `updated_at`, from `gh api --paginate repos/{{ repo | default("") }}/issues/{{ issue | default("") }}/comments`. If your verdict comment's last line already names that exact revision (`Reviewed plan revision: comment <id> updated <updated_at>`), you already judged this plan as it is: stop, writing nothing (a repeated dispatch never overturns a verdict). Otherwise review the plan comment as it is now. If the owner edited it, review the edit. If there is no plan comment, call `board_block` naming that and stop.
 
 ## 2. Check it against the code
 
@@ -57,7 +57,9 @@ Read the code the plan names, at the trunk's head, read-only (`gh`, or a read-on
 
 ## 3. Verdict
 
-Call `board_post_verdict` with `project`, `repo`, `issue`, `verdict` and `body`. The body is the review core's verdict shape: for `approve`, what passed on each axis, specifically; for `changes_requested`, one bullet per must-fix. A concern outside this plan's gate becomes a follow-up issue (`gh issue create`), linked in a closing line, not a bullet.
+Call `board_post_verdict` with `project`, `repo`, `issue`, `verdict` and `body`. The body is the review core's verdict shape: for `approve`, what passed on each axis, specifically; for `changes_requested`, one bullet per must-fix. A concern outside this plan's gate becomes a follow-up issue (`gh issue create`), linked in a closing line, not a bullet. The body's last line names the revision you reviewed, exactly `Reviewed plan revision: comment <id> updated <updated_at>`, with the values you read in step 1.
+
+Just before the call, read the plan comment's `id` and `updated_at` again. If either differs from what you read in step 1, the plan changed while you reviewed it: do not post; go back to step 1 and review the plan as it is now.
 
 `board_post_verdict` writes or updates your one verdict comment and makes the move: `approve` leaves the card in Plan Review for the owner; a first `changes_requested` sends it back to Patch in Plan; a second one blocks it. Your body for a second round therefore states the disagreement plainly for the owner.
 
