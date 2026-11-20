@@ -52,7 +52,7 @@ Never retarget the PR: the gate refuses `gh pr edit --base` ("a retargeted PR is
 
 ## 3. Merge
 
-Merge only when required checks are green, the branch is up to date, threads are resolved, and GitHub already shows `scarlett/review/<base>` as success on the current head (`gh api repos/{{ repo | default("") }}/commits/<head sha>/status`). If her status is missing or not success, stop: the board check sends the head to her, and you are dispatched again after she has reviewed it.
+Merge only when required checks are green, the branch is up to date, threads are resolved, and GitHub already shows `scarlett/review/<base>` as success on the current head (`gh api --paginate repos/{{ repo | default("") }}/commits/<head sha>/statuses`, newest first, every page: the first status with that context is the latest, and it must be success from `sc0red-scarlett[bot]`). If her status is missing or not success, stop: the board check sends the head to her, and you are dispatched again after she has reviewed it.
 
 Then run `gh pr merge <pr> --repo {{ repo | default("") }} --match-head-commit <full head sha>`. The gate checks your records and that her status is already on the head, and GitHub enforces the ruleset. A refusal tells you what is missing: fix that, and never work around it. If the head moved, read the PR again from step 1.
 

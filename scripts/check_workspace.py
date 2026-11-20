@@ -271,23 +271,28 @@ def check_agent(agent, ws, cited, findings):
         findings.append(f"{agent}: agent.env AGENCY_AGENT_ID is {env.get('AGENCY_AGENT_ID')!r}, expected {agent!r}")
     redis = env.get("REDIS_URL") or ""
     if redis_database(redis) is None:
-        findings.append(f"{agent}: agent.env REDIS_URL must name the agent's own Redis database "
-                        f"(redis://host:port/<db>), got {redis!r}; the single-flight locks live there")
+        findings.append(f"{agent}: agent.env REDIS_URL must be redis://127.0.0.1:6379/<db> (db 0-15, no "
+                        f"leading zeros), the agent's own database, got {redis!r}; the single-flight "
+                        f"locks live there")
     check_run_token(agent, env, findings)
     check_review_poster(agent, ws, findings)
     return stages
 
 
+#: Both daemons use the Mac's one local Redis, spelled one way, so two
+#: agents' URLs name the same database exactly when their db numbers match.
+REDIS_URL_FORM = re.compile(r"redis://127\.0\.0\.1:6379/(0|[1-9][0-9]?)")
+
+
 def redis_database(url):
-    """The database a ``redis://host:port/<db>`` URL names, as Redis does
-    (host lowercased, default port 6379, the db as an integer, so ``/01`` is
-    ``/1``), or None for anything else."""
-    match = re.fullmatch(r"redis://([A-Za-z0-9.\-]+)(?::(\d+))?/(\d+)", url or "")
-    if not match:
+    """The database number of a canonical ``redis://127.0.0.1:6379/<db>``
+    URL (no leading zeros, 0-15), or None for any other spelling: another
+    spelling of the same server (``localhost``, ``127.1``, ``/01``) would
+    hide two agents sharing one database."""
+    match = REDIS_URL_FORM.fullmatch(url or "")
+    if not match or int(match.group(1)) > 15:
         return None
-    host, port, db = match.groups()
-    host = host.lower()
-    return ("127.0.0.1" if host == "localhost" else host), int(port or 6379), int(db)
+    return int(match.group(1))
 
 
 def check_single_flight(agent, name, rule, timeout, findings):
@@ -576,12 +581,16 @@ def self_test(repo_root):
         if not any("MAX_CONCURRENT_RUNS" in f for f in run(root, None)):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
         for label, agent, edit, expect in [
-            ("no-redis", "patch", lambda text: re.sub(r"(?m)^REDIS_URL=.*\n", "", text), "REDIS_URL must name"),
-            *[(f"shared-redis-{i}", "scarlett",
+            ("no-redis", "patch", lambda text: re.sub(r"(?m)^REDIS_URL=.*\n", "", text), "REDIS_URL must be"),
+            ("shared-redis", "scarlett", lambda text: re.sub(r"(?m)^REDIS_URL=.*$",
+                                                             "REDIS_URL=redis://127.0.0.1:6379/1", text),
+             "a different database per agent"),
+            *[(f"redis-spelling-{i}", "scarlett",
                (lambda url: lambda text: re.sub(r"(?m)^REDIS_URL=.*$", f"REDIS_URL={url}", text))(url),
-               "a different database per agent")
-              for i, url in enumerate(["redis://127.0.0.1:6379/1", "redis://127.0.0.1:6379/01",
-                                       "redis://localhost/1", "redis://LOCALHOST:6379/001"])],
+               "REDIS_URL must be")
+              for i, url in enumerate(["redis://127.0.0.1:6379/01", "redis://localhost:6379/1",
+                                       "redis://127.1:6379/1", "redis://127.0.0.1:65536/2",
+                                       "redis://127.0.0.1/2", "redis://127.0.0.1:6379/16"])],
         ]:
             root = os.path.join(scratch, label)
             shutil.copytree(base, root)

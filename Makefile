@@ -77,8 +77,10 @@ vendor-shared: pyyaml ## Copy the cited shared/ docs from engineering-standards
 	done; \
 	if [ -e workspaces/shared ]; then mv workspaces/shared "$$stage/previous" || exit 1; fi; \
 	mv "$$stage/shared" workspaces/shared || { \
-		if [ -e "$$stage/previous" ]; then mv "$$stage/previous" workspaces/shared; fi; \
-		echo "vendor-shared: could not install the new copy; workspaces/shared/ left as it was"; exit 1; }; \
+		if [ ! -e "$$stage/previous" ] || mv "$$stage/previous" workspaces/shared; then \
+			echo "vendor-shared: could not install the new copy; workspaces/shared/ left as it was"; exit 1; fi; \
+		trap - EXIT; \
+		echo "vendor-shared: could not install the new copy nor restore the old one; the old copy is at $$stage/previous"; exit 1; }; \
 	echo "vendor-shared: $$(find workspaces/shared -type f | wc -l | tr -d ' ') doc(s) from $(ENGINEERING_STANDARDS)/shared"
 
 help: ## Show targets

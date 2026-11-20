@@ -85,8 +85,11 @@ routing:
           # narrows but does not close a race between two overlapping passes:
           # they can dispatch the same card twice. The stage rules close it:
           # each has singleFlightKey '{{ repo }}#{{ issue }}', so a second
-          # dispatch for a card coalesces behind the live run (one writer per
-          # card, which board.open_for_review's registration relies on).
+          # dispatch of a stage for a card coalesces behind that stage's live
+          # run. The lock is per stage rule and per agent's Redis, not per
+          # card across stages: board.open_for_review's registration relies
+          # on it because only the card's current column's stage can
+          # register (its column guard refuses the others).
           # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
           # joins with its own step after NeuroBloom has run end to end.
           - name: sweepNeurobloom
