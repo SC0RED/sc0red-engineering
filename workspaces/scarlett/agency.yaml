@@ -18,8 +18,9 @@
 #
 # Separation of duties: Scarlett runs as her own macOS user with her own
 # 1Password service account, the only one that can read the sc0red-scarlett
-# App key. Her code review posts `scarlett/review/<base>` through the gate's
-# own `scarlett-review` tool (engineering-standards gate/), never by hand.
+# App key. Her code review posts `scarlett/review/<base>` through
+# agency_tools.scarlett.post_review, which runs the gate's own
+# `scarlett-review` hook (engineering-standards gate/), never by hand.
 #
 # Concurrency (MAX_CONCURRENT_RUNS 1) lives in agent.env beside this file.
 
@@ -57,8 +58,9 @@ routing:
       # the head, runs Astra in its read-only sandbox, and reads GitHub's CI
       # results for the head. She never executes the PR's code, since she runs
       # as the user that can read her App key. On CI green and Astra "merge"
-      # the gate's scarlett-review posts scarlett/review/<base>, the status
-      # that lets the PR merge; otherwise board.block.
+      # scarlett.post_review (the gate's scarlett-review hook, refused for any
+      # other agent) posts scarlett/review/<base>, the status that lets the PR
+      # merge; otherwise board.block.
       - name: code-review
         condition:
           equals: { field: taskType, value: code-review }
@@ -71,3 +73,4 @@ routing:
         tools:
           - module.python: agency_tools.board.read
           - module.python: agency_tools.board.block
+          - module.python: agency_tools.scarlett.post_review

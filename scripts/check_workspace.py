@@ -23,7 +23,9 @@ Neither knows what this team's design promises, so this checks that:
 - each agent's run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no
   Projects permission, so only the board tools move cards, Scarlett's has
   no contents write, so she cannot push, and Patch's has no statuses write;
-- only Scarlett's workspace names scarlett-review, the tool that posts her
+- only Scarlett's code-review stage holds scarlett.post_review (the one tool
+  outside agency_tools.board.* any stage holds), and only Scarlett's workspace
+  names it or scarlett-review, the hook it runs to post her
   status with her App key, so Patch never runs it;
 - one routing.internal rule per stage;
 - Code Review dispatches Patch as the author and Scarlett as the reviewer,
@@ -103,10 +105,15 @@ READ_ONLY_PERMISSIONS = {
     "scarlett": {"contents": "Scarlett pushes nothing"},
     "patch": {"statuses": "only Scarlett posts scarlett/review"},
 }
-# The tool that posts Scarlett's status with her App key. Only her workspace
-# may name it.
+# The tool that posts Scarlett's status with her App key (agency-tools'
+# scarlett.post_review, which runs the gate's scarlett-review hook). Only her
+# workspace may name either.
+POST_REVIEW = "agency_tools.scarlett.post_review"
 REVIEW_POSTER = "scarlett-review"
+REVIEW_POSTERS = (REVIEW_POSTER, "scarlett_post_review", "scarlett.post_review")
 REVIEW_POSTER_OWNER = "scarlett"
+# The one tool outside agency_tools.board.* a stage may hold, pinned per stage.
+NON_BOARD_TOOLS = {("scarlett", "code-review"): {POST_REVIEW}}
 # Scarlett runs as the user that can read her App key, so she never executes
 # a PR's code: her workspace never names the make recorder.
 NEVER_RUNS_PR_CODE = {"scarlett": "make-verified"}
@@ -198,8 +205,10 @@ def check_agent(agent, ws, cited, findings):
             pinned = ALLOWLIST.get((agent, stage))
             granted = tool_names(rule.get("tools"))
             outside = [t for t in granted if not t.startswith(BOARD)]
-            if outside:
-                findings.append(f"{agent}/{name}: tools outside {BOARD}*: {', '.join(outside)}")
+            extras = NON_BOARD_TOOLS.get((agent, stage), set())
+            if set(outside) != extras:
+                findings.append(f"{agent}/{name}: tools outside {BOARD}* are {sorted(outside)}; "
+                                f"the pinned set is {sorted(extras)}")
             if pinned is None:
                 findings.append(f"{agent}/{name}: stage {stage!r} has no pinned allowlist in check_workspace.py")
             else:
@@ -285,9 +294,9 @@ def check_review_poster(agent, ws, findings):
     never runs it, so Patch never needs her App key. Scarlett's never names
     the make recorder, since running a PR's make would run its code as her."""
     if agent == REVIEW_POSTER_OWNER:
-        forbidden, reason = NEVER_RUNS_PR_CODE[agent], "Scarlett never runs a PR's code"
+        forbidden, reason = (NEVER_RUNS_PR_CODE[agent],), "Scarlett never runs a PR's code"
     else:
-        forbidden, reason = REVIEW_POSTER, "only Scarlett posts her status"
+        forbidden, reason = REVIEW_POSTERS, "only Scarlett posts her status"
     for dirpath, _, files in os.walk(ws):
         for file in sorted(files):
             path = os.path.join(dirpath, file)
@@ -295,8 +304,10 @@ def check_review_poster(agent, ws, findings):
                 text = open(path, encoding="utf-8").read()
             except (UnicodeDecodeError, OSError):
                 continue
-            if forbidden in text:
-                findings.append(f"{agent}: {os.path.relpath(path, os.path.dirname(ws))} names {forbidden}; {reason}")
+            for name in forbidden:
+                if name in text:
+                    findings.append(
+                        f"{agent}: {os.path.relpath(path, os.path.dirname(ws))} names {name}; {reason}")
 
 
 def board_config(root):
@@ -471,6 +482,13 @@ def self_test(repo_root):
         ("stage outside internal", "patch", lambda c: c["routing"].__setitem__(
             "github", {"rules": [copy.deepcopy(internal(c, "build"))]}), "belong in routing.internal"),
         ("missing stage", "scarlett", lambda c: c["routing"]["internal"]["rules"].pop(), "no routing.internal rule"),
+        ("patch posts review", "patch", lambda c: internal(c, "code-review")["tools"].append(
+            {"module.python": POST_REVIEW}), "only Scarlett posts her status"),
+        ("post review off code-review", "scarlett", lambda c: internal(c, "plan-review")["tools"].append(
+            {"module.python": POST_REVIEW}), "the pinned set is []"),
+        ("code-review without post review", "scarlett", lambda c: internal(c, "code-review").__setitem__(
+            "tools", [t for t in internal(c, "code-review")["tools"] if t.get("module.python") != POST_REVIEW]),
+         "the pinned set is ['agency_tools.scarlett.post_review']"),
     ]
     failures = []
     # Scratch under the repo (gitignored .validate.*/), never the boot disk.

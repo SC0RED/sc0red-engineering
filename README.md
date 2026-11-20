@@ -14,7 +14,7 @@ The board is the state. Every two minutes, Patch's `board-check` schedule rule r
 | Plan → Planning | Patch | `plan` | `board.submit_plan` (→ Plan Review), `board.propose_split`, or `board.block` |
 | Plan Review | Scarlett | `plan-review` | `board.post_verdict` (approve stays for the owner) |
 | Ready for Development → In Development | Patch | `build` | `board.open_for_review` (→ Code Review) |
-| Code Review | Scarlett | `code-review` | read-only review (diff, Astra, GitHub CI; she never runs the PR's code), then `scarlett/review/<base>` posted by the gate's `scarlett-review`, or `board.block` with the findings |
+| Code Review | Scarlett | `code-review` | read-only review (diff, Astra, GitHub CI; she never runs the PR's code), then `scarlett/review/<base>` posted by `scarlett.post_review` (the gate's `scarlett-review`; only Scarlett's code-review stage holds it), or `board.block` with the findings |
 | Code Review | Patch | `code-review` | merge through the gate once Scarlett's status is on the head, deploy watched, then `board.merged` |
 | Hotfix | Patch | `hotfix` | two PRs (production fix and trunk back-merge), then `board.open_for_review`; the card moves on only when both have merged |
 

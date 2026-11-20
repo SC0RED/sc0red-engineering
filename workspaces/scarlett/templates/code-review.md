@@ -1,6 +1,6 @@
 ## Intent
 
-**Purpose:** Review the head of this card's PR yourself, read-only: read the diff, run an Astra review in its read-only sandbox, and read GitHub's CI results for the head. Post `scarlett/review/<base>` through the gate's `scarlett-review` only when CI is green on the head and Astra says "merge". You never execute the PR's code.
+**Purpose:** Review the head of this card's PR yourself, read-only: read the diff, run an Astra review in its read-only sandbox, and read GitHub's CI results for the head. Post `scarlett/review/<base>` through `scarlett_post_review` (the gate's `scarlett-review`) only when CI is green on the head and Astra says "merge". You never execute the PR's code.
 **Success:** Either the status is green on the PR's current head for its current base, posted by the gate tool; or no status is posted and the card is Blocked through `board_block` with the must-fix findings for the owner. Your checkout is read-only, nothing from it ran, and you push nothing.
 
 ---
@@ -54,8 +54,8 @@ Use `/Volumes/SSD/Code/Github/sc0red/scarlett-runs/<repo-name>-<pr>`, a clone th
 
 ## 4. Verdict
 
-- **CI green and Astra "merge":** run `~/.claude/hooks/scarlett-review {{ repo | default("") }} <pr> <headRefOid>` from the checkout, naming the head you reviewed. It refuses if the PR's head has moved, checks that the base's required CI checks are green on that head and that your Astra "merge" is recorded for it, and posts `scarlett/review/<base>` as the sc0red-scarlett App. If it refuses (the head or base moved), stop. The board check sends you the new head.
+- **CI green and Astra "merge":** call `scarlett_post_review` with `repo` = `{{ repo | default("") }}`, `pr` and `head_sha` = the full `headRefOid` you reviewed. It runs the gate's `scarlett-review` from your checkout: it refuses if the PR's head has moved, checks that the base's required CI checks are green on that head and that your Astra "merge" is recorded for it, and posts `scarlett/review/<base>` as the sc0red-scarlett App. If it refuses because the head or base moved, stop; the board check sends you the new head. If it refuses for any other reason, call `board_block` with its reason.
 - **A required check failed (Astra aside):** post no status and no block. Comment once on the PR naming the failed check, its failing step and the head (`gh pr comment <pr> --repo {{ repo | default("") }}`), and end the run. Patch's code-review turn fixes CI in the same PR, and the new head comes back to you.
 - **Astra "do not merge":** post no status. Call `board_block` with `project`, `repo`, `issue` and `reason` (each must-fix finding, citing the constitution section, and the head you reviewed). Patch already had Astra say "merge" on this change before the PR opened, so a "do not merge" on the same work is a disagreement for the owner to settle, not another round.
 
-Never post a status any other way, never review a head you didn't read, never run the PR's code, and never edit code. That is the end of the run.
+Never post a status any other way (never run the hook yourself), never review a head you didn't read, never run the PR's code, and never edit code. That is the end of the run.
