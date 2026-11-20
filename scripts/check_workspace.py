@@ -326,7 +326,11 @@ def board_config(root):
 def sweep_boards(root, findings):
     """Each board.sweep step in Patch's schedule, with the config its `board`
     name resolves to in boards.json."""
-    config = yaml.safe_load(open(os.path.join(root, "workspaces", "patch", "agency.yaml"), encoding="utf-8")) or {}
+    try:
+        with open(os.path.join(root, "workspaces", "patch", "agency.yaml"), encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except OSError:
+        return []  # check_agent already reported the missing agency.yaml
     boards, error = board_config(root)
     if error:
         findings.append(error)
@@ -366,6 +370,9 @@ def check_boards(root, stages_by_agent, findings):
             slots = (board.get("slots") or {}).get(agent)
             if slots != expected:
                 findings.append(f"boards/{name}: slots.{agent} is {slots!r}, expected {expected} (agent.env)")
+        if REVIEWED_COLUMN not in (board.get("stages") or {}):
+            findings.append(f"boards/{name}: no {REVIEWED_COLUMN} stage, so no PR on it gets "
+                            f"Scarlett's review")
         for column, entries in (board.get("stages") or {}).items():
             if column in OWNER_COLUMNS:
                 findings.append(f"boards/{name}: {column} is the owner's move, never a stage column")
@@ -515,27 +522,36 @@ def self_test(repo_root):
         def sweep_arg(name):
             return lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"].__setitem__("board", name)
 
+        # The board the real schedule sweeps, by whatever name it has.
+        swept = sweep_boards(base, [])
+        if not swept:
+            failures.append("board cases: the unmodified schedule sweeps no board in boards.json")
+            swept = [("", {})]
+        name = swept[0][0]
+
         def no_production(boards):
-            boards["neurobloom"]["repos"][0].pop("production_branch")
+            boards[name]["repos"][0].pop("production_branch")
 
         board_cases = [
             # (label, change to boards.json (all boards), change to Patch's agency.yaml, expected finding)
-            ("owner-column", lambda b: b["neurobloom"]["stages"].__setitem__(
+            ("owner-column", lambda b: b[name]["stages"].__setitem__(
                 "Ready for Development", {"agent": "patch", "task_type": "build"}), None, "owner's move"),
-            ("slots", lambda b: b["neurobloom"]["slots"].__setitem__("scarlett", 3), None, "slots.scarlett"),
-            ("stall", lambda b: b["neurobloom"]["stages"]["In Development"].__setitem__("stall_minutes", 60),
+            ("slots", lambda b: b[name]["slots"].__setitem__("scarlett", 3), None, "slots.scarlett"),
+            ("stall", lambda b: b[name]["stages"]["In Development"].__setitem__("stall_minutes", 60),
              None, "stall_minutes"),
-            ("reviewer-app", lambda b: b["neurobloom"]["stages"]["Code Review"]["reviewer"].__setitem__(
+            ("reviewer-app", lambda b: b[name]["stages"]["Code Review"]["reviewer"].__setitem__(
                 "status_app", "sc0red-patch"), None, "the reviewer must be"),
-            ("stage-list", lambda b: b["neurobloom"]["stages"].__setitem__(
+            ("stage-list", lambda b: b[name]["stages"].__setitem__(
                 "Code Review", [{"agent": "patch", "task_type": "code-review"}]), None, "one mapping"),
-            ("code-review-stall", lambda b: b["neurobloom"]["stages"]["Code Review"].__setitem__(
+            ("code-review-stall", lambda b: b[name]["stages"]["Code Review"].__setitem__(
                 "stall_minutes", 140), None, "stall_minutes"),
+            ("no-code-review", lambda b: b[name]["stages"].pop("Code Review"), None,
+             "no Code Review stage"),
             ("hotfix-without-production", no_production, None, "names no production_branch"),
             ("unknown-board", None, sweep_arg("winston"), "must name a board in boards.json"),
             ("inline-board", None, sweep_arg({"project": "neurobloom-lilly/2"}),
              "must name a board in boards.json"),
-            ("unswept-board", lambda b: b.__setitem__("spare", copy.deepcopy(b["neurobloom"])), None,
+            ("unswept-board", lambda b: b.__setitem__("spare", copy.deepcopy(b[name])), None,
              "no board.sweep step sweeps it"),
         ]
         for label, boards_change, config_change, expect in board_cases:
@@ -553,6 +569,16 @@ def self_test(repo_root):
         os.remove(os.path.join(root, "workspaces", "patch", BOARDS_FILE))
         if not any("cannot read" in f for f in run(root, None)):
             failures.append("no-boards-file: a missing boards.json not flagged")
+        root = os.path.join(scratch, "no-patch-config")
+        shutil.copytree(base, root)
+        os.remove(os.path.join(root, "workspaces", "patch", "agency.yaml"))
+        try:
+            found = run(root, None)
+        except OSError as exc:
+            failures.append(f"no-patch-config: raised {exc!r} instead of reporting it")
+        else:
+            if not any("patch" in f and "agency.yaml" in f for f in found):
+                failures.append(f"no-patch-config: a missing agency.yaml not flagged, got {found}")
         for label, agent, permissions, expect in [
             ("projects-token", "patch", "contents:write,organization_projects:write", "organization_projects"),
             ("scarlett-push", "scarlett", "contents:write,issues:write", "contents:write"),

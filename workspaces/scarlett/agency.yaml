@@ -60,7 +60,9 @@ routing:
       # as the user that can read her App key. On CI green and Astra "merge"
       # scarlett.post_review (the gate's scarlett-review hook, refused for any
       # other agent) posts scarlett/review/<base>, the status that lets the PR
-      # merge; otherwise board.block.
+      # merge. A failed required check posts neither a status nor a block:
+      # she comments on the PR naming the check and ends the run. A CI-green
+      # head that Astra does not pass gives board.block, for the owner.
       - name: code-review
         condition:
           equals: { field: taskType, value: code-review }

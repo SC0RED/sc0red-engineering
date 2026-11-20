@@ -1,5 +1,5 @@
 .PHONY: check check-structure no-symlinks check-workspace check-system-docs \
-        validate-workspace tool-refs vendor-shared help
+        validate-workspace tool-refs vendor-shared pyyaml help
 
 .DEFAULT_GOAL := check
 
@@ -32,21 +32,25 @@ no-symlinks:
 
 # The design's promises: stage rules, pinned allowlists, timeouts, the board
 # check that never runs an LLM, concurrency. Self-test first.
-check-workspace:
-	@python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
+check-workspace: pyyaml
 	@python3 scripts/check_workspace.py --self-test >/dev/null || (python3 scripts/check_workspace.py --self-test; exit 1)
 	@python3 scripts/check_workspace.py
 
-check-system-docs:
+check-system-docs: pyyaml
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
 	@python3 scripts/check_workspace.py --shared "$(ENGINEERING_STANDARDS)/shared"
+
+# check_workspace.py reads YAML: every target that runs it depends on this one.
+pyyaml:
+	@python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
 
 # The daemon's own loader, on the layout the daemon runs: each workspace beside
 # the vendored shared/.
 validate-workspace:
 	@test -x "$(AGENCY_BIN)" || { echo "AGENCY_BIN must name an agency binary built from Agency development (got '$(AGENCY_BIN)')"; exit 1; }
-	@stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX"); trap 'rm -rf "$$stage"' EXIT; \
-	cp -R $(addprefix workspaces/,$(AGENTS)) workspaces/shared "$$stage/"; \
+	@stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX") || { echo "validate-workspace: could not make a staging directory"; exit 1; }; \
+	trap 'rm -rf "$$stage"' EXIT; \
+	cp -R $(addprefix workspaces/,$(AGENTS)) workspaces/shared "$$stage/" || { echo "validate-workspace: could not stage the workspaces"; exit 1; }; \
 	for agent in $(AGENTS); do \
 		"$(AGENCY_BIN)" validate-workspace "$$stage/$$agent" || exit 1; \
 	done
@@ -61,17 +65,20 @@ tool-refs:
 
 # Re-vendor workspaces/shared/ from engineering-standards: exactly the shared/
 # docs the templates cite, copied unedited. check-system-docs fails on drift.
-vendor-shared: ## Copy the cited shared/ docs from engineering-standards
+vendor-shared: pyyaml ## Copy the cited shared/ docs from engineering-standards
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
-	@python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
 	@docs=$$(python3 scripts/check_workspace.py --cited-shared) || exit 1; \
 	test -n "$$docs" || { echo "vendor-shared: no template cites a shared/ doc; workspaces/shared/ left as it was"; exit 1; }; \
-	stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX"); trap 'rm -rf "$$stage"' EXIT; \
+	stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX") || { echo "vendor-shared: could not make a staging directory; workspaces/shared/ left as it was"; exit 1; }; \
+	trap 'rm -rf "$$stage"' EXIT; \
 	for doc in $$docs; do \
 		test -f "$(ENGINEERING_STANDARDS)/shared/$$doc" || { echo "vendor-shared: $(ENGINEERING_STANDARDS)/shared/$$doc is missing; workspaces/shared/ left as it was"; exit 1; }; \
 		mkdir -p "$$stage/shared/$$(dirname "$$doc")" && cp "$(ENGINEERING_STANDARDS)/shared/$$doc" "$$stage/shared/$$doc" || exit 1; \
 	done; \
-	rm -rf workspaces/shared && mv "$$stage/shared" workspaces/shared && \
+	if [ -e workspaces/shared ]; then mv workspaces/shared "$$stage/previous" || exit 1; fi; \
+	mv "$$stage/shared" workspaces/shared || { \
+		if [ -e "$$stage/previous" ]; then mv "$$stage/previous" workspaces/shared; fi; \
+		echo "vendor-shared: could not install the new copy; workspaces/shared/ left as it was"; exit 1; }; \
 	echo "vendor-shared: $$(find workspaces/shared -type f | wc -l | tr -d ' ') doc(s) from $(ENGINEERING_STANDARDS)/shared"
 
 help: ## Show targets

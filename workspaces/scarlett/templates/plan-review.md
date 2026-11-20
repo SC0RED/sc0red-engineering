@@ -1,7 +1,7 @@
 ## Intent
 
 **Purpose:** Review Patch's plan on this card and give one verdict, `approve` or `changes_requested`, judged against the review core and the constitution.
-**Success:** One verdict comment, written or updated through `board_post_verdict`. Each blocker names what is wrong, where in the plan, and the right shape, and cites a constitution section. Nothing else is written: no code, no edit to the plan, no other card move.
+**Success:** One verdict comment, written or updated through `board_post_verdict`. Each blocker names what is wrong, where in the plan, and the right shape, and cites a constitution section. The only other write is a follow-up issue for a concern outside this plan's gate (step 3), linked from the verdict: no code, no edit to the plan, no other card move.
 
 ---
 
