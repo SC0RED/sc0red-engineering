@@ -270,12 +270,24 @@ def check_agent(agent, ws, cited, findings):
     if env.get("AGENCY_AGENT_ID") != agent:
         findings.append(f"{agent}: agent.env AGENCY_AGENT_ID is {env.get('AGENCY_AGENT_ID')!r}, expected {agent!r}")
     redis = env.get("REDIS_URL") or ""
-    if not re.fullmatch(r"redis://[^/\s]+/\d+", redis):
+    if redis_database(redis) is None:
         findings.append(f"{agent}: agent.env REDIS_URL must name the agent's own Redis database "
                         f"(redis://host:port/<db>), got {redis!r}; the single-flight locks live there")
     check_run_token(agent, env, findings)
     check_review_poster(agent, ws, findings)
     return stages
+
+
+def redis_database(url):
+    """The database a ``redis://host:port/<db>`` URL names, as Redis does
+    (host lowercased, default port 6379, the db as an integer, so ``/01`` is
+    ``/1``), or None for anything else."""
+    match = re.fullmatch(r"redis://([A-Za-z0-9.\-]+)(?::(\d+))?/(\d+)", url or "")
+    if not match:
+        return None
+    host, port, db = match.groups()
+    host = host.lower()
+    return ("127.0.0.1" if host == "localhost" else host), int(port or 6379), int(db)
 
 
 def check_single_flight(agent, name, rule, timeout, findings):
@@ -473,8 +485,9 @@ def run(root, upstream):
     # not namespaced by agent: two agents on one database share them.
     redis = {agent: read_env(os.path.join(root, "workspaces", agent, "agent.env")).get("REDIS_URL")
              for agent in RUNNER}
-    if len(set(redis.values())) != len(redis):
-        findings.append(f"agent.env: REDIS_URL must differ per agent, got {redis}")
+    databases = [redis_database(url) for url in redis.values()]
+    if None not in databases and len(set(databases)) != len(databases):
+        findings.append(f"agent.env: REDIS_URL must name a different database per agent, got {redis}")
     check_boards(root, stages, findings)
     check_vendored(root, cited, upstream, findings)
     return findings
@@ -564,9 +577,11 @@ def self_test(repo_root):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
         for label, agent, edit, expect in [
             ("no-redis", "patch", lambda text: re.sub(r"(?m)^REDIS_URL=.*\n", "", text), "REDIS_URL must name"),
-            ("shared-redis", "scarlett", lambda text: re.sub(r"(?m)^REDIS_URL=.*$",
-                                                             "REDIS_URL=redis://127.0.0.1:6379/1", text),
-             "REDIS_URL must differ per agent"),
+            *[(f"shared-redis-{i}", "scarlett",
+               (lambda url: lambda text: re.sub(r"(?m)^REDIS_URL=.*$", f"REDIS_URL={url}", text))(url),
+               "a different database per agent")
+              for i, url in enumerate(["redis://127.0.0.1:6379/1", "redis://127.0.0.1:6379/01",
+                                       "redis://localhost/1", "redis://LOCALHOST:6379/001"])],
         ]:
             root = os.path.join(scratch, label)
             shutil.copytree(base, root)
