@@ -1,0 +1,30 @@
+{
+  "neurobloom": {
+    "project": "neurobloom-lilly/2",
+    "repos": [
+      { "repo": "neurobloom-lilly/neurobloom-app", "production_branch": "production" },
+      { "repo": "neurobloom-lilly/neurobloom-backend", "production_branch": "production" },
+      { "repo": "neurobloom-lilly/neurobloom-infra", "production_branch": "production" },
+      { "repo": "neurobloom-lilly/neurobloom-mcp", "production_branch": "production" },
+      { "repo": "neurobloom-lilly/neurobloom-website", "production_branch": "production" }
+    ],
+    "stages": {
+      "Planning": { "agent": "patch", "task_type": "plan", "stall_minutes": 120 },
+      "Plan Review": { "agent": "scarlett", "task_type": "plan-review", "stall_minutes": 90 },
+      "In Development": { "agent": "patch", "task_type": "build", "stall_minutes": 300 },
+      "Code Review": {
+        "agent": "patch",
+        "task_type": "code-review",
+        "stall_minutes": 240,
+        "reviewer": {
+          "agent": "scarlett",
+          "task_type": "code-review",
+          "status_app": "sc0red-scarlett",
+          "status": "scarlett/review"
+        }
+      },
+      "Hotfix": { "agent": "patch", "task_type": "hotfix", "stall_minutes": 300 }
+    },
+    "slots": { "patch": 2, "scarlett": 1 }
+  }
+}

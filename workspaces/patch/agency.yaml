@@ -53,13 +53,17 @@ routing:
           - module.python: agency_tools.board.sweep
           - module.python: agency_tools.predicate.always_stop
         preRun:
-          # One sweep step per live board. The board config lives here and
-          # nowhere else: its project, the repos it covers, which agent and
-          # stage each column dispatches, how long a dispatch with no known
-          # outcome holds its slot (stall_minutes, longer than the stage rule's
-          # runTimeoutSecs plus queue wait), and run slots (which must equal
-          # MAX_CONCURRENT_RUNS in each agent.env). Who a block mentions is
-          # BOARD_NOTIFY_LOGIN in agent.env.
+          # One sweep step per live board, naming it in boards.json (this
+          # workspace). The board config lives there and nowhere else, so the
+          # sweep and the card tools (board.open_for_review and board.merged
+          # read a repo's production_branch from it) work from one config:
+          # its project, the repos it covers, each repo's production_branch
+          # (the branch a hotfix's fix must target and merge into), which
+          # agent and stage each column dispatches, how long a dispatch with
+          # no known outcome holds its slot (stall_minutes, longer than the
+          # stage rule's runTimeoutSecs plus queue wait), and run slots (which
+          # must equal MAX_CONCURRENT_RUNS in each agent.env). Who a block
+          # mentions is BOARD_NOTIFY_LOGIN in agent.env.
           # Code Review has two turns per PR head: Scarlett (the reviewer)
           # first; Patch once her scarlett/review/<base> status, posted by the
           # sc0red-scarlett App, is green on the head.
@@ -77,29 +81,7 @@ routing:
           - name: sweepNeurobloom
             tool: agency_tools.board.sweep
             args:
-              board:
-                project: neurobloom-lilly/2
-                repos:
-                  - neurobloom-lilly/neurobloom-app
-                  - neurobloom-lilly/neurobloom-backend
-                  - neurobloom-lilly/neurobloom-infra
-                  - neurobloom-lilly/neurobloom-mcp
-                  - neurobloom-lilly/neurobloom-website
-                stages:
-                  Planning: { agent: patch, task_type: plan, stall_minutes: 120 }
-                  Plan Review: { agent: scarlett, task_type: plan-review, stall_minutes: 90 }
-                  In Development: { agent: patch, task_type: build, stall_minutes: 300 }
-                  Code Review:
-                    agent: patch
-                    task_type: code-review
-                    stall_minutes: 240
-                    reviewer:
-                      agent: scarlett
-                      task_type: code-review
-                      status_app: sc0red-scarlett
-                      status: scarlett/review
-                  Hotfix: { agent: patch, task_type: hotfix, stall_minutes: 300 }
-                slots: { patch: 2, scarlett: 1 }
+              board: neurobloom
           - name: stop
             tool: agency_tools.predicate.always_stop
             args:

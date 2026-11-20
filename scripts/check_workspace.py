@@ -28,6 +28,9 @@ Neither knows what this team's design promises, so this checks that:
 - one routing.internal rule per stage;
 - Code Review dispatches Patch as the author and Scarlett as the reviewer,
   whose status counts only from the sc0red-scarlett App;
+- each board.sweep step names a board in Patch's boards.json (the one config
+  the sweep and the card tools read), every board there is swept, and a board
+  with a Hotfix stage names a production_branch for each repo;
 - every column a board sweep dispatches maps to a stage that has a rule, and
   Ready for Development is never a stage column (the owner moves cards there;
   the sweep only claims them out of it);
@@ -48,6 +51,7 @@ Exit 0 = clean; exit 1 = findings, one per line.
 
 import argparse
 import copy
+import json
 import os
 import re
 import shutil
@@ -59,6 +63,9 @@ import yaml
 BOARD = "agency_tools.board."
 ALWAYS_STOP = "agency_tools.predicate.always_stop"
 SWEEP = "agency_tools.board.sweep"
+# The board config the sweep and the card tools read, in Patch's workspace.
+BOARDS_FILE = "boards.json"
+HOTFIX_COLUMN = "Hotfix"
 
 # The pinned allowlist per (agent, stage). Changing a stage's authority means
 # changing this table in the same PR, where review sees it.
@@ -292,22 +299,54 @@ def check_review_poster(agent, ws, findings):
                 findings.append(f"{agent}: {os.path.relpath(path, os.path.dirname(ws))} names {forbidden}; {reason}")
 
 
-def sweep_boards(root):
-    """The `board` argument of every board.sweep step in Patch's schedule."""
+def board_config(root):
+    """Patch's boards.json: each board's name to its config, the one file the
+    sweep and the card tools read."""
+    path = os.path.join(root, "workspaces", "patch", BOARDS_FILE)
+    try:
+        boards = json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, f"boards: cannot read workspaces/patch/{BOARDS_FILE}: {exc}"
+    if not isinstance(boards, dict) or not all(isinstance(b, dict) for b in boards.values()):
+        return None, f"boards: workspaces/patch/{BOARDS_FILE} must map each board's name to its config"
+    return boards, None
+
+
+def sweep_boards(root, findings):
+    """Each board.sweep step in Patch's schedule, with the config its `board`
+    name resolves to in boards.json."""
     config = yaml.safe_load(open(os.path.join(root, "workspaces", "patch", "agency.yaml"), encoding="utf-8")) or {}
-    boards = []
+    boards, error = board_config(root)
+    if error:
+        findings.append(error)
+        return []
+    swept = []
     for rule in ((config.get("routing") or {}).get("schedule") or {}).get("rules") or []:
         for step in rule.get("preRun") or []:
-            if step.get("tool") == SWEEP:
-                boards.append((step.get("name", "?"), (step.get("args") or {}).get("board") or {}))
-    return boards
+            if step.get("tool") != SWEEP:
+                continue
+            name = (step.get("args") or {}).get("board")
+            if not isinstance(name, str) or name not in boards:
+                findings.append(f"boards/{step.get('name', '?')}: board must name a board in {BOARDS_FILE} "
+                                f"({sorted(boards)}), got {name!r}")
+                continue
+            swept.append((name, boards[name]))
+    for name in sorted(set(boards) - {n for n, _ in swept}):
+        findings.append(f"boards/{name}: in {BOARDS_FILE} but no board.sweep step sweeps it")
+    return swept
 
 
 def check_boards(root, stages_by_agent, findings):
-    boards = sweep_boards(root)
-    if not boards:
+    boards = sweep_boards(root, findings)
+    if not boards and not any(f.startswith("boards") for f in findings):
         findings.append("boards: no board.sweep step sweeps any board")
     for name, board in boards:
+        if HOTFIX_COLUMN in (board.get("stages") or {}):
+            for entry in board.get("repos") or []:
+                if not isinstance(entry, dict) or not str(entry.get("production_branch") or "").strip():
+                    repo = entry.get("repo") if isinstance(entry, dict) else entry
+                    findings.append(f"boards/{name}: {repo} names no production_branch, and the board has "
+                                    f"a {HOTFIX_COLUMN} stage (its fix must target that branch)")
         if not re.fullmatch(r"[A-Za-z0-9-]+/[0-9]+", str(board.get("project", ""))):
             findings.append(f"boards/{name}: project must be 'owner/number', got {board.get('project')!r}")
         if not board.get("repos"):
@@ -403,6 +442,13 @@ def _mutate(root, agent, change):
     _write(path, yaml.safe_dump(config, sort_keys=False))
 
 
+def _mutate_boards(root, change):
+    path = os.path.join(root, "workspaces", "patch", BOARDS_FILE)
+    boards = json.load(open(path, encoding="utf-8"))
+    change(boards)
+    _write(path, json.dumps(boards, indent=2))
+
+
 def self_test(repo_root):
     """Each case breaks one promise in a copy of the real workspaces and
     expects a finding naming it; the unmodified copy must be clean."""
@@ -448,46 +494,47 @@ def self_test(repo_root):
                "AGENCY_AGENT_ID=patch\nMAX_CONCURRENT_RUNS=4\nBOARD_NOTIFY_LOGIN=x\n")
         if not any("MAX_CONCURRENT_RUNS" in f for f in run(root, None)):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
-        root = os.path.join(scratch, "owner-column")
-        shutil.copytree(base, root)
+        def sweep_arg(name):
+            return lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"].__setitem__("board", name)
 
-        def owner_column(config):
-            board = config["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
-            board["stages"]["Ready for Development"] = {"agent": "patch", "task_type": "build"}
-        _mutate(root, "patch", owner_column)
-        found = run(root, None)
-        if not any("owner's move" in f for f in found):
-            failures.append(f"owner-column: Ready for Development as a stage column not flagged: {found}")
-        root = os.path.join(scratch, "slots")
+        def no_production(boards):
+            boards["neurobloom"]["repos"][0].pop("production_branch")
+
+        board_cases = [
+            # (label, change to boards.json (all boards), change to Patch's agency.yaml, expected finding)
+            ("owner-column", lambda b: b["neurobloom"]["stages"].__setitem__(
+                "Ready for Development", {"agent": "patch", "task_type": "build"}), None, "owner's move"),
+            ("slots", lambda b: b["neurobloom"]["slots"].__setitem__("scarlett", 3), None, "slots.scarlett"),
+            ("stall", lambda b: b["neurobloom"]["stages"]["In Development"].__setitem__("stall_minutes", 60),
+             None, "stall_minutes"),
+            ("reviewer-app", lambda b: b["neurobloom"]["stages"]["Code Review"]["reviewer"].__setitem__(
+                "status_app", "sc0red-patch"), None, "the reviewer must be"),
+            ("stage-list", lambda b: b["neurobloom"]["stages"].__setitem__(
+                "Code Review", [{"agent": "patch", "task_type": "code-review"}]), None, "one mapping"),
+            ("code-review-stall", lambda b: b["neurobloom"]["stages"]["Code Review"].__setitem__(
+                "stall_minutes", 140), None, "stall_minutes"),
+            ("hotfix-without-production", no_production, None, "names no production_branch"),
+            ("unknown-board", None, sweep_arg("winston"), "must name a board in boards.json"),
+            ("inline-board", None, sweep_arg({"project": "neurobloom-lilly/2"}),
+             "must name a board in boards.json"),
+            ("unswept-board", lambda b: b.__setitem__("spare", copy.deepcopy(b["neurobloom"])), None,
+             "no board.sweep step sweeps it"),
+        ]
+        for label, boards_change, config_change, expect in board_cases:
+            root = os.path.join(scratch, label)
+            shutil.copytree(base, root)
+            if boards_change:
+                _mutate_boards(root, boards_change)
+            if config_change:
+                _mutate(root, "patch", config_change)
+            found = run(root, None)
+            if not any(expect in f for f in found):
+                failures.append(f"{label}: expected a finding containing {expect!r}, got {found}")
+        root = os.path.join(scratch, "no-boards-file")
         shutil.copytree(base, root)
-        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
-                ["slots"].__setitem__("scarlett", 3))
-        if not any("slots.scarlett" in f for f in run(root, None)):
-            failures.append("slots: a board's run slots disagreeing with agent.env not flagged")
-        root = os.path.join(scratch, "stall")
-        shutil.copytree(base, root)
-        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
-                ["stages"]["In Development"].__setitem__("stall_minutes", 60))
-        if not any("stall_minutes" in f for f in run(root, None)):
-            failures.append("stall: a stall window shorter than the run timeout not flagged")
-        root = os.path.join(scratch, "reviewer-app")
-        shutil.copytree(base, root)
-        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
-                ["stages"]["Code Review"]["reviewer"].__setitem__("status_app", "sc0red-patch"))
-        if not any("the reviewer must be" in f for f in run(root, None)):
-            failures.append("reviewer-app: a reviewer status from another App not flagged")
-        root = os.path.join(scratch, "stage-list")
-        shutil.copytree(base, root)
-        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
-                ["stages"].__setitem__("Code Review", [{"agent": "patch", "task_type": "code-review"}]))
-        if not any("one mapping" in f for f in run(root, None)):
-            failures.append("stage-list: a list of agents for one column not flagged")
-        root = os.path.join(scratch, "code-review-stall")
-        shutil.copytree(base, root)
-        _mutate(root, "patch", lambda c: c["routing"]["schedule"]["rules"][0]["preRun"][0]["args"]["board"]
-                ["stages"]["Code Review"].__setitem__("stall_minutes", 140))
-        if not any("stall_minutes" in f for f in run(root, None)):
-            failures.append("code-review-stall: a stall window shorter than the author's run timeout not flagged")
+        os.remove(os.path.join(root, "workspaces", "patch", BOARDS_FILE))
+        if not any("cannot read" in f for f in run(root, None)):
+            failures.append("no-boards-file: a missing boards.json not flagged")
         for label, agent, permissions, expect in [
             ("projects-token", "patch", "contents:write,organization_projects:write", "organization_projects"),
             ("scarlett-push", "scarlett", "contents:write,issues:write", "contents:write"),

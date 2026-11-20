@@ -27,6 +27,7 @@ The full design is in `ENGINEERING_TEAM_DESIGN.md` (the lead's copy, beside this
 ## Layout
 
 - `workspaces/<agent>/agency.yaml`: the rules. `scripts/check_workspace.py` pins each stage's allowlist, so a change to what a stage may do changes that table in the same PR.
+- `workspaces/patch/boards.json`: the board config, by board name: project, repos (each with the `production_branch` a hotfix's fix must target), stages and run slots. The sweep step in `agency.yaml` names a board here, and `board.open_for_review` and `board.merged` read the same file for a repo's production branch, so no agent ever supplies it.
 - `workspaces/<agent>/templates/`: one prompt per stage. Each opens with `## Intent` and cites engineering-standards rather than restating it.
 - `workspaces/<agent>/identity/`: SOUL and IDENTITY.
 - `workspaces/<agent>/agent.env`: daemon settings the launchd job loads (`MAX_CONCURRENT_RUNS`: Patch 2, Scarlett 1).
