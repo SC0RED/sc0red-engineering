@@ -116,8 +116,8 @@ AI agents optimize for their own implementation speed by default. This produces 
 
 ## The God Commit
 
-Fixing the bug, refactoring the file, updating the tests, adding a feature, and changing the formatting — all in one commit/PR.
+Fixing the bug, refactoring the file, updating the tests, adding a feature, and changing the formatting — all in one commit.
 
-**The rule:** One concern per commit. If your PR description needs "and" more than once, it's doing too much.
+**The rule:** One concern per commit. If your commit message needs "and" more than once, it's doing too much. A PR may carry many such commits: it is a deploy, not a unit of concern (see [shipping.md](shipping.md)).
 
 Revert test: could someone revert one part of this commit without reintroducing the bug or breaking the feature? If yes, they're separate concerns — split the commit. If no, they're inseparable — keep them together.

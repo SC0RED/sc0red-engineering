@@ -1,0 +1,23 @@
+name: Checks
+
+# Only make targets, no check logic here (shipping.md). Bare `make` on the Mac
+# runs these plus the checks that need private sibling checkouts
+# (engineering-standards shared/, agency-tools, an Agency binary), which this
+# repo has no credentials to fetch.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet pyyaml
+      - run: make check-structure
