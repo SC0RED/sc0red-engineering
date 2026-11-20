@@ -1,5 +1,5 @@
-.PHONY: check check-structure no-symlinks check-workspace check-system-docs \
-        validate-workspace tool-refs vendor-shared pyyaml help
+.PHONY: check check-structure no-symlinks check-workspace test-sync check-system-docs \
+        validate-workspace tool-refs vendor-shared pyyaml sync-tools install-sync help
 
 .DEFAULT_GOAL := check
 
@@ -8,12 +8,19 @@
 #   ENGINEERING_STANDARDS  engineering-standards checkout; workspaces/shared/
 #                          vendors exactly the docs of its shared/ that the
 #                          templates cite ({{system-doc:shared/...}}), unedited
-#   AGENCY_TOOLS           agency-tools checkout the tool refs must resolve in
+#   AGENCY_TOOLS           agency-tools the tool refs must resolve in; by
+#                          default the release the daemons run (sync-tools)
 #   AGENCY_BIN             an `agency` binary built from Agency development
 ENGINEERING_STANDARDS ?= ../agency-standards
-AGENCY_TOOLS ?= ../agency-tools
+AGENCY_TOOLS ?= $(AGENCY_RUNTIME_DIR)/current/agency-tools
 AGENCY_BIN ?= $(shell command -v agency 2>/dev/null)
 AGENTS := patch scarlett
+# Where sync-tools installs the box's agency-tools + contracts, and the launchd
+# job that refreshes it. Fixed (`override`, so neither the command line nor the
+# environment changes it): both agent.env files and check_workspace.py name it.
+override AGENCY_RUNTIME_DIR := /Volumes/SSD/agency-runtime
+SYNC_LABEL := com.sc0red.agency-tools-sync
+SYNC_PLIST := $(HOME)/Library/LaunchAgents/$(SYNC_LABEL).plist
 
 check: check-structure check-system-docs validate-workspace tool-refs ## Every check (bare make)
 	@echo "sc0red-engineering: every check passed"
@@ -21,7 +28,7 @@ check: check-structure check-system-docs validate-workspace tool-refs ## Every c
 # The checks that need no private sibling checkout: the subset Actions runs,
 # since this repo has no credentials for engineering-standards, agency-tools
 # or Agency.
-check-structure: no-symlinks check-workspace ## Checks that need no sibling checkout (Actions)
+check-structure: no-symlinks check-workspace test-sync ## Checks that need no sibling checkout (Actions)
 
 # The Agency runtime rejects a symlink that escapes the workspace root, and the
 # vendored shared docs are a real sibling directory, never a link.
@@ -35,6 +42,46 @@ no-symlinks:
 check-workspace: pyyaml
 	@python3 scripts/check_workspace.py --self-test >/dev/null || (python3 scripts/check_workspace.py --self-test; exit 1)
 	@python3 scripts/check_workspace.py
+
+# scripts/sync_agency_tools.sh and scripts/run_on_release.sh against a fake gh,
+# a fake uv and a local agency-tools origin, all in temporary directories under
+# the repo (gitignored .validate.*/).
+test-sync:
+	@stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX") || { echo "test-sync: could not make a staging directory"; exit 1; }; \
+	trap 'rm -rf "$$stage"' EXIT; \
+	TMPDIR="$$stage" python3 scripts/test_sync_agency_tools.py >"$$stage/out" 2>&1 \
+		&& echo "test-sync: OK" || { cat "$$stage/out"; exit 1; }
+
+# Run the launchd sync job now. Only launchd runs scripts/sync_agency_tools.sh,
+# and it never starts the job while a run is alive, so syncs never overlap;
+# kickstart without -k leaves a running sync alone. Output: the sync log.
+sync-tools: ## Run the agency-tools sync job now (after install-sync)
+	@launchctl print "gui/$$(id -u)/$(SYNC_LABEL)" >/dev/null 2>&1 || { echo "sync-tools: $(SYNC_LABEL) is not loaded; run make install-sync"; exit 1; }
+	@launchctl kickstart -p "gui/$$(id -u)/$(SYNC_LABEL)" && echo "sync-tools: started; see $(AGENCY_RUNTIME_DIR)/sync.log"
+
+# Copy the sync script and the daemon launcher into $(AGENCY_RUNTIME_DIR)/bin
+# (each replaced by a rename, so a run never reads a half-copied file), then
+# render the launchd job (every 10 minutes and at load) against that copy and
+# (re)load it: the job never depends on this checkout. Rerun after changing
+# either script. PATH is the directories of the gh, uv, git and python3 this
+# shell resolves.
+install-sync: ## Install the scripts + load the launchd job that runs the sync
+	@for tool in gh uv git python3; do command -v $$tool >/dev/null || { echo "install-sync: no $$tool on PATH"; exit 1; }; done; \
+	path=$$(for tool in gh uv git python3; do dirname "$$(command -v $$tool)"; done | awk '!seen[$$0]++' | paste -sd: -):/usr/bin:/bin; \
+	mkdir -p "$(AGENCY_RUNTIME_DIR)/bin" "$(dir $(SYNC_PLIST))" || exit 1; \
+	install -S -m 0755 scripts/sync_agency_tools.sh scripts/run_on_release.sh "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
+	new="$(SYNC_PLIST).new"; trap 'rm -f "$$new"' EXIT; \
+	sed -e "s|@SCRIPT@|$(AGENCY_RUNTIME_DIR)/bin/sync_agency_tools.sh|g" -e "s|@RUNTIME@|$(AGENCY_RUNTIME_DIR)|g" \
+		-e "s|@PATH@|$$path|g" launchd/$(SYNC_LABEL).plist > "$$new" || exit 1; \
+	plutil -lint -s "$$new" || { echo "install-sync: rendered plist is invalid; nothing loaded"; exit 1; }; \
+	mv "$$new" "$(SYNC_PLIST)" || exit 1; \
+	domain="gui/$$(id -u)"; \
+	if launchctl print "$$domain/$(SYNC_LABEL)" >/dev/null 2>&1; then \
+		launchctl bootout "$$domain/$(SYNC_LABEL)" || exit 1; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do launchctl print "$$domain/$(SYNC_LABEL)" >/dev/null 2>&1 || break; sleep 1; done; \
+	fi; \
+	launchctl bootstrap "$$domain" "$(SYNC_PLIST)" || exit 1; \
+	echo "install-sync: $(SYNC_LABEL) loaded; log $(AGENCY_RUNTIME_DIR)/sync.log"
 
 check-system-docs: pyyaml
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }

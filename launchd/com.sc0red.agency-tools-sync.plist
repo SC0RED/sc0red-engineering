@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by `make install-sync`, which fills in the script path, the
+     runtime directory and PATH. Runs scripts/sync_agency_tools.sh every 10
+     minutes and at load. `make sync-tools` kickstarts this job; launchd never
+     starts it while a run is alive, so syncs never overlap. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sc0red.agency-tools-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@SCRIPT@</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENCY_RUNTIME_DIR</key>
+    <string>@RUNTIME@</string>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>@RUNTIME@/sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>@RUNTIME@/sync.log</string>
+</dict>
+</plist>

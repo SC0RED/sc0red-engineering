@@ -23,6 +23,9 @@ Neither knows what this team's design promises, so this checks that:
 - each agent's run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no
   Projects permission, so only the board tools move cards, Scarlett's has
   no contents write, so she cannot push, and Patch's has no statuses write;
+- each agent.env points AGENCY_TOOLS_ROOT, AGENCY_PYTHON_BINARY and
+  AGENCY_CONTRACTS_DIR at the release scripts/sync_agency_tools.sh installs,
+  so both daemons run the agency-tools and contracts the box runs;
 - only Scarlett's code-review stage holds scarlett.post_review (the one tool
   outside agency_tools.board.* any stage holds), and only Scarlett's workspace
   names it or scarlett-review, the hook it runs to post her
@@ -124,6 +127,14 @@ NON_BOARD_TOOLS = {("scarlett", "code-review"): {POST_REVIEW}}
 # a PR's code: her workspace never names the make recorder.
 NEVER_RUNS_PR_CODE = {"scarlett": "make-verified"}
 SHARED_PREFIX = "shared/"
+# Both daemons run the agency-tools and contracts the box runs, as
+# scripts/sync_agency_tools.sh installs them on this Mac (never a dev checkout).
+RUNTIME_CURRENT = "/Volumes/SSD/agency-runtime/current"
+RUNTIME_ENV = {
+    "AGENCY_TOOLS_ROOT": f"{RUNTIME_CURRENT}/agency-tools",
+    "AGENCY_PYTHON_BINARY": f"{RUNTIME_CURRENT}/agency-tools/.venv/bin/python",
+    "AGENCY_CONTRACTS_DIR": f"{RUNTIME_CURRENT}/contracts",
+}
 SYSTEM_DOC = re.compile(r"\{\{\s*system-doc:\s*([^}\s]+)\s*\}\}")
 
 
@@ -269,6 +280,10 @@ def check_agent(agent, ws, cited, findings):
         findings.append(f"{agent}: agent.env has no BOARD_NOTIFY_LOGIN, so a block would mention nobody")
     if env.get("AGENCY_AGENT_ID") != agent:
         findings.append(f"{agent}: agent.env AGENCY_AGENT_ID is {env.get('AGENCY_AGENT_ID')!r}, expected {agent!r}")
+    for key, want in RUNTIME_ENV.items():
+        if env.get(key) != want:
+            findings.append(f"{agent}: agent.env {key} is {env.get(key)!r}, expected {want!r} "
+                            "(the release scripts/sync_agency_tools.sh installs)")
     redis = env.get("REDIS_URL") or ""
     if redis_database(redis) is None:
         findings.append(f"{agent}: agent.env REDIS_URL must be redis://127.0.0.1:6379/<db> (db 0-15, no "
@@ -580,6 +595,14 @@ def self_test(repo_root):
                "AGENCY_AGENT_ID=patch\nMAX_CONCURRENT_RUNS=4\nBOARD_NOTIFY_LOGIN=x\n")
         if not any("MAX_CONCURRENT_RUNS" in f for f in run(root, None)):
             failures.append("concurrency: MAX_CONCURRENT_RUNS=4 not flagged")
+        root = os.path.join(scratch, "dev-tools-root")
+        shutil.copytree(base, root)
+        path = os.path.join(root, "workspaces", "scarlett", "agent.env")
+        env = open(path, encoding="utf-8").read()
+        env = re.sub(r"(?m)^AGENCY_TOOLS_ROOT=.*$", "AGENCY_TOOLS_ROOT=/Volumes/SSD/Code/agency-tools", env)
+        _write(path, env)
+        if not any(f.startswith("scarlett:") and "AGENCY_TOOLS_ROOT" in f for f in run(root, None)):
+            failures.append("dev-tools-root: an agent.env AGENCY_TOOLS_ROOT off the synced release not flagged")
         for label, agent, edit, expect in [
             ("no-redis", "patch", lambda text: re.sub(r"(?m)^REDIS_URL=.*\n", "", text), "REDIS_URL must be"),
             # Scarlett on Patch's database, whichever that is.
