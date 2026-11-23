@@ -3,7 +3,10 @@
 <!-- Rendered by `make install-sync`, which fills in the script path, the
      runtime directory and PATH. Runs scripts/sync_agency_tools.sh every 10
      minutes and at load. `make sync-tools` kickstarts this job; launchd never
-     starts it while a run is alive, so syncs never overlap. -->
+     starts it while a run is alive, so syncs never overlap.
+     bash, not launchd, opens the log: macOS lets launchd itself open nothing
+     on the external SSD (exit 78, EX_CONFIG), while /bin/bash holds Full Disk
+     Access. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -11,7 +14,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
+    <string>-c</string>
+    <string>exec /bin/bash "$0" &gt;&gt;"$1" 2&gt;&amp;1</string>
     <string>@SCRIPT@</string>
+    <string>@RUNTIME@/sync.log</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -24,9 +30,5 @@
   <integer>600</integer>
   <key>RunAtLoad</key>
   <true/>
-  <key>StandardOutPath</key>
-  <string>@RUNTIME@/sync.log</string>
-  <key>StandardErrorPath</key>
-  <string>@RUNTIME@/sync.log</string>
 </dict>
 </plist>
