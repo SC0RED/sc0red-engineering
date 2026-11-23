@@ -4,9 +4,9 @@
      runtime directory and PATH. Runs scripts/sync_agency_tools.sh every 10
      minutes and at load. `make sync-tools` kickstarts this job; launchd never
      starts it while a run is alive, so syncs never overlap.
-     bash, not launchd, opens the log: macOS lets launchd itself open nothing
-     on the external SSD (exit 78, EX_CONFIG), while /bin/bash holds Full Disk
-     Access. -->
+     bash, not launchd, opens the log: with StandardOutPath on the external
+     SSD, every run exited 78 (EX_CONFIG) before the script started, while
+     /bin/bash, granted Full Disk Access, can write there. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>

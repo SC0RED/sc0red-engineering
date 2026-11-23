@@ -430,5 +430,53 @@ class SyncTest(unittest.TestCase):
         self.assertIn("is not a release link", done.stderr)
 
 
+class LaunchAgentTest(unittest.TestCase):
+    """The launchd job's own ProgramArguments, run as launchd would run them.
+
+    launchd may open nothing on the external SSD (every run exited 78,
+    EX_CONFIG, before the script started), so bash opens the log: the plist
+    names no StandardOutPath/StandardErrorPath, and its command appends both
+    streams of the script to the log and returns the script's status.
+    """
+
+    PLIST = os.path.join(os.path.dirname(HERE), "launchd", "com.sc0red.agency-tools-sync.plist")
+
+    def rendered(self, script, runtime):
+        import plistlib
+
+        with open(self.PLIST) as handle:
+            text = handle.read().replace("@SCRIPT@", script).replace("@RUNTIME@", runtime).replace("@PATH@", "/usr/bin:/bin")
+        return plistlib.loads(text.encode())
+
+    def run_job(self, body, work=None):
+        if work is None:
+            work = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, work)
+        script = os.path.join(work, "job.sh")
+        with open(script, "w") as handle:
+            handle.write(body)
+        job = self.rendered(script, work)
+        status = subprocess.run(job["ProgramArguments"], env=job["EnvironmentVariables"], stdin=subprocess.DEVNULL, capture_output=True).returncode
+        log = os.path.join(work, "sync.log")
+        return work, status, read(log) if os.path.exists(log) else None
+
+    def test_launchd_opens_no_output_path(self):
+        job = self.rendered("/x/sync.sh", "/x")
+        self.assertNotIn("StandardOutPath", job)
+        self.assertNotIn("StandardErrorPath", job)
+
+    def test_bash_appends_both_streams_to_the_log(self):
+        work, status, log = self.run_job('echo out; echo err >&2\n')
+        self.assertEqual(status, 0)
+        self.assertEqual(log, "out\nerr\n")
+        _, _, log = self.run_job('echo again\n', work)
+        self.assertEqual(log, "out\nerr\nagain\n")
+
+    def test_the_script_status_is_the_job_status(self):
+        _, status, log = self.run_job('echo failing; exit 3\n')
+        self.assertEqual(status, 3)
+        self.assertEqual(log, "failing\n")
+
+
 if __name__ == "__main__":
     unittest.main()
