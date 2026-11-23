@@ -49,7 +49,7 @@ Call `board_read` with `project`, `repo` and `issue` for the card's fields. If t
 
 ## 2. Check it against the code
 
-Read the code the plan names, at the trunk's head, read-only (`gh`, or a read-only clone under `/Volumes/SSD/Code/Github/sc0red/scarlett-runs/`). In particular:
+Read the code the plan names, at the trunk's head, read-only (`gh`, or a shallow clone of the trunk, `git clone --depth 1`, made in this run's own directory, where you started: the only place your shell can write, removed when the run ends). In particular:
 - **Reuse (constitution §4):** search for existing code that already does the job. A plan that rebuilds it gets `changes_requested`, citing the existing path.
 - **Test (constitution §8):** a Definition of Done without the test that proves the change (a regression test for a bug) gets `changes_requested`.
 - **Estimate:** Risk and Intensity that don't match the scope per estimation.md get flagged.
