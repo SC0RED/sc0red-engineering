@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- One agent's agency daemon. Rendered per agent by `make install-daemon
+     AGENT=<agent>`, which fills in the label, the launcher, the agent, the
+     log and PATH. The launcher (scripts/start_daemon.sh) loads the agent's
+     agent.env, takes the 1Password service-account token from the login
+     keychain and execs the daemon through run_on_release.sh, so the job's pid
+     is the daemon's.
+     bash, not launchd, opens the log: launchd cannot open a file on the
+     external SSD (StandardOutPath there exits 78, EX_CONFIG), while /bin/bash,
+     granted Full Disk Access, can.
+     A stop sends SIGTERM to the daemon, which takes no new job and waits up to
+     five minutes for runs in flight; ExitTimeOut gives it that long before
+     SIGKILL. When the daemon exits, launchd kills what is left in its process
+     group (AbandonProcessGroup is false), so claude and MCP-server children
+     never outlive it: systemd's KillMode=mixed on the Linux boxes. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>exec /bin/bash "$0" "$1" &gt;&gt;"$2" 2&gt;&amp;1</string>
+    <string>@LAUNCHER@</string>
+    <string>@AGENT@</string>
+    <string>@LOG@</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENCY_RUNTIME_DIR</key>
+    <string>@RUNTIME@</string>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ExitTimeOut</key>
+  <integer>330</integer>
+  <key>ProcessType</key>
+  <string>Standard</string>
+</dict>
+</plist>

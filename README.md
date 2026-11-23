@@ -43,6 +43,29 @@ Both daemons run the agency-tools and contracts the box runs, never a dev checko
 - **One release per daemon:** `agent.env` names `AGENCY_TOOLS_ROOT`, `AGENCY_PYTHON_BINARY` and `AGENCY_CONTRACTS_DIR` under `current`. Each daemon's launchd job starts it through `scripts/run_on_release.sh`, which resolves `current` once, at spawn, to the real release path, rewrites those three variables to it and execs the daemon. A sync never changes the code under a running daemon; a restart picks up the new release. There are no pins, so restart the daemons within 7 days of their release leaving `current` and previous.
 - **Rollback:** point `current` at the previous release and restart the daemons. The sync leaves it there until a newer successful deploy run appears and is installed, so the lasting fix is a new deploy.
 
+## The daemons on this Mac
+
+Each agent is one `agency` daemon under launchd in the owner's login session (`gui/<uid>`), label `com.sc0red.agency-<agent>`, rendered from `launchd/com.sc0red.agency-daemon.plist`. Patch serves on 8810, Scarlett on 8811 (her daemon is installed once the Codex tool bridge lands). Install in this order:
+
+1. `make install-agency AGENCY_SRC=<Agency checkout>`: the release binary (`cargo build --release` in that checkout, from `development`) plus the Agency scripts that go with it (`agency_mcp_server.py`, `provision_database.sh`, `lifecycle_provision.sql`) into `/Volumes/SSD/agency-runtime/agency/`, swapped in by renames; `build.info` records the sha.
+2. `make team-db`: the team database, idempotent (`scripts/team_db.sh`). The 1Password item "Agency team daemons" (Engineering) is created once with generated values: the daemons' shared `AGENCY_AGENT_TOKEN`, `AGENCY_INTERNAL_EVENT_TOKEN` and `AGENCY_RUN_CLAIM_KEY`, and both database logins. The Docker container `agency-team-pg` (postgres:16-alpine, `127.0.0.1:5460`, volume `agency-team-pgdata`, `--restart unless-stopped`) holds database `agency_team`; its superuser `agency_team_admin` migrates, and Agency's own `provision_database.sh` provisions it. The daemons serve as `agency_team_writer`, an ordinary login. Rerun after an install-agency that brings migrations.
+3. `make install-daemon AGENT=patch`: the workspace beside the vendored `shared/` in `/Volumes/SSD/agency-runtime/workspaces/`, the launcher `scripts/start_daemon.sh`, and the launchd job, (re)loaded. A loaded job is booted out first, which waits for the daemon to drain its runs (up to 5 minutes).
+4. `make daemon-health AGENT=patch`; `make test-survival AGENT=patch` (layer 2 below).
+
+How it runs:
+
+- **Launch:** launchd runs `/bin/bash -c 'exec /bin/bash start_daemon.sh <agent> >>log 2>&1'`, so bash, not launchd, opens the log on the SSD. `start_daemon.sh` sources the installed `agent.env`, reads the 1Password service-account token from the login-keychain item `OP_SERVICE_ACCOUNT_KEYCHAIN_ITEM` names, and execs the daemon through `run_on_release.sh`, so the job's pid is the daemon's. KeepAlive restarts it (at most every 30 s); on stop launchd sends SIGTERM, allows 330 s for the drain, then kills what is left in the process group.
+- **Per daemon, on the SSD:** `/Volumes/SSD/agency-runtime/<agent>/agency.log`, `audit.log` (`AGENCY_AUDIT_LOG_PATH`; each tool call and its result, the board sweep's included) and `events-buffer.jsonl` (`AGENCY_EVENTS_BUFFER_PATH`, where events wait while Postgres is down).
+- **Secrets:** `AGENCY_OP_BINDINGS_FILE` is `workspaces/<agent>/op-bindings.json`, key to `op://` reference, never a value. Agency's SecretManager resolves them with the service account "The Agency" (Engineering vault), kept in the login keychain as `sc0red-agency-op-service-account`, so the 1Password app's lock never matters.
+- **TLS:** the tools' python (the python.org framework build) has no CA bundle, so `agent.env` sets `SSL_CERT_FILE=/etc/ssl/cert.pem`.
+
+**The owner's manual steps** (layer 2 parts a script must not do):
+
+- **Reboot:** the login keychain stays locked until you log in, so the daemon can't read its service-account token: `start_daemon.sh` exits 1 and launchd retries every 30 s. Once you log in, check `make daemon-health AGENT=patch` and that `audit.log` shows a new `board.sweep` within 2 minutes. Docker Desktop must start at login too (it restarts `agency-team-pg`).
+- **Sleep attempt:** the Mac is set never to sleep; try it anyway (Apple menu → Sleep), wake it, and check the same two things.
+- **Locked 1Password app:** lock it and check that the next sweep still runs (the daemons use the service account, never the app).
+- **Separation of duties:** every service account we have reads the whole Engineering vault, so Patch's daemon can read Scarlett's App key. The design's fix is the owner's: a vault and service account per agent, and each daemon under its own macOS user.
+
 Shared discipline (the constitution, engineering loop, shipping, review core, issue guides) lives in engineering-standards' `shared/`. `workspaces/shared/` vendors exactly the docs the templates cite, unedited, and `systemDocRoots: [..]` resolves `{{system-doc:shared/...}}` against it. To pick up a change in engineering-standards, run `make vendor-shared` and commit the result; never edit the copy here.
 
 ## Checks
