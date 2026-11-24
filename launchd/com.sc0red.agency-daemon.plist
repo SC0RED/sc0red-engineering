@@ -11,9 +11,11 @@
      granted Full Disk Access, can.
      A stop sends SIGTERM to the daemon, which takes no new job and waits up to
      five minutes for runs in flight; ExitTimeOut gives it that long before
-     SIGKILL. When the daemon exits, launchd kills what is left in its process
-     group (AbandonProcessGroup is false), so claude and MCP-server children
-     never outlive it: systemd's KillMode=mixed on the Linux boxes. -->
+     SIGKILL. launchd then kills what is left in the job's own process group
+     only. Agency starts claude and its python tools in process groups of
+     their own, so after a crash or a SIGKILL they keep running: unlike
+     systemd's cgroup on the Linux boxes, launchd does not reap them (README,
+     "Orphaned runs"). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>

@@ -7,7 +7,7 @@
 #      daemons' shared bearer tokens and run-claim key, and both database
 #      logins. Created once, with generated values, from a JSON template on
 #      stdin; never rewritten. No value is printed, logged or put on argv.
-#   2. The container agency-team-pg (postgres:16-alpine, 127.0.0.1:5460, named
+#   2. The container agency-team-pg (postgres:16.15-alpine, 127.0.0.1:5460, named
 #      volume agency-team-pgdata, restarted by Docker), database agency_team.
 #      Its superuser agency_team_admin migrates and owns; created on first
 #      run, started when stopped.
@@ -25,6 +25,8 @@ KEYCHAIN_ITEM=${OP_SERVICE_ACCOUNT_KEYCHAIN_ITEM:-sc0red-agency-op-service-accou
 VAULT=Engineering
 ITEM="Agency team daemons"
 CONTAINER=agency-team-pg
+# Pinned: the volume's data directory belongs to this major version.
+IMAGE=postgres:16.15-alpine
 VOLUME=agency-team-pgdata
 HOST_PORT=5460
 DATABASE=agency_team
@@ -40,7 +42,10 @@ export OP_SERVICE_ACCOUNT_TOKEN
 
 field() { op read "op://$VAULT/$ITEM/$1"; }
 
-if ! op item get "$ITEM" --vault "$VAULT" --format json >/dev/null 2>&1; then
+# Created only when 1Password says there is no such item; any other failure
+# (network, token) stops here with op's own message.
+if ! lookup=$(op item get "$ITEM" --vault "$VAULT" --format json 2>&1 >/dev/null); then
+  case "$lookup" in *"isn't an item"*) ;; *) fail "1Password lookup of \"$ITEM\" failed: $lookup" ;; esac
   echo "team-db: creating the 1Password item \"$ITEM\" in $VAULT"
   python3 - "$ITEM" "$ADMIN" "$WRITER" "$HOST_PORT" "$DATABASE" <<'PY' | op item create --vault "$VAULT" - >/dev/null
 import json, secrets, sys
@@ -70,7 +75,7 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
   # process's environment, not argv.
   POSTGRES_PASSWORD=$(field admin_password) docker run -d --name "$CONTAINER" \
     --restart unless-stopped -p "127.0.0.1:$HOST_PORT:5432" -v "$VOLUME:/var/lib/postgresql/data" \
-    -e POSTGRES_PASSWORD -e POSTGRES_USER="$ADMIN" -e POSTGRES_DB="$DATABASE" postgres:16-alpine >/dev/null
+    -e POSTGRES_PASSWORD -e POSTGRES_USER="$ADMIN" -e POSTGRES_DB="$DATABASE" "$IMAGE" >/dev/null
 elif [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
   echo "team-db: starting container $CONTAINER"
   docker start "$CONTAINER" >/dev/null

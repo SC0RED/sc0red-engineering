@@ -109,44 +109,54 @@ team-db: ## Create/start the team Postgres, then migrate + provision it (idempot
 
 # Install one agent's daemon: its workspace beside the vendored shared/, the
 # launcher, and its launchd job (launchd/com.sc0red.agency-daemon.plist,
-# label com.sc0red.agency-<agent>), then (re)load the job. A loaded job is
-# booted out first, which waits for the daemon to drain its runs. PATH is the
-# directories of the tools a run uses, as this shell resolves them.
+# label com.sc0red.agency-<agent>), then (re)load the job. Everything is
+# staged first; only then is a loaded job booted out (which waits for the
+# daemon to drain its runs), the staged copies renamed into place and the job
+# bootstrapped. PATH is the directories of the tools a run uses, as this shell
+# resolves them. An agent's agent.env must carry the daemon settings (PORT and
+# the rest); Scarlett's gains them with the Codex bridge.
 AGENT ?=
 DAEMON_TOOLS := claude op gh git python3 uv make docker cargo node
+DAEMON_AGENT = $(if $(filter $(AGENT),$(AGENTS)),$(AGENT),$(error AGENT must be one of $(AGENTS)))
 install-daemon: ## Install + (re)load an agent's daemon: AGENT=patch
-	@case "$(AGENT)" in patch|scarlett) ;; *) echo "install-daemon: AGENT must be one of $(AGENTS)"; exit 1;; esac
+	@grep -q '^PORT=' workspaces/$(DAEMON_AGENT)/agent.env || { echo "install-daemon: workspaces/$(AGENT)/agent.env has no daemon settings (PORT)"; exit 1; }
 	@test -x "$(AGENCY_RUNTIME_DIR)/agency/agency" || { echo "install-daemon: no agency at $(AGENCY_RUNTIME_DIR)/agency; run make install-agency"; exit 1; }
 	@for tool in $(DAEMON_TOOLS); do command -v $$tool >/dev/null || { echo "install-daemon: no $$tool on PATH"; exit 1; }; done; \
 	path=$$(for tool in $(DAEMON_TOOLS); do dirname "$$(command -v $$tool)"; done | awk '!seen[$$0]++' | paste -sd: -):/usr/bin:/bin:/usr/sbin:/sbin; \
 	label="com.sc0red.agency-$(AGENT)"; plist="$(HOME)/Library/LaunchAgents/$$label.plist"; domain="gui/$$(id -u)"; \
-	new="$$plist.new"; trap 'rm -f "$$new"' EXIT; \
+	ws="$(AGENCY_RUNTIME_DIR)/workspaces"; stage="$$ws/.staging-$(AGENT)"; new="$$plist.new"; \
+	trap 'rm -rf "$$new" "$$stage"' EXIT; \
+	mkdir -p "$(AGENCY_RUNTIME_DIR)/bin" "$$ws" "$(AGENCY_RUNTIME_DIR)/$(AGENT)" "$(dir $(SYNC_PLIST))" || exit 1; \
 	sed -e "s|@LABEL@|$$label|g" -e "s|@LAUNCHER@|$(AGENCY_RUNTIME_DIR)/bin/start_daemon.sh|g" -e "s|@AGENT@|$(AGENT)|g" \
 		-e "s|@LOG@|$(AGENCY_RUNTIME_DIR)/$(AGENT)/agency.log|g" -e "s|@RUNTIME@|$(AGENCY_RUNTIME_DIR)|g" \
 		-e "s|@PATH@|$$path|g" launchd/com.sc0red.agency-daemon.plist > "$$new" || exit 1; \
 	plutil -lint -s "$$new" || { echo "install-daemon: rendered plist is invalid; nothing changed"; exit 1; }; \
+	rm -rf "$$stage" && mkdir -p "$$stage" || exit 1; \
+	cp -R workspaces/$(AGENT) workspaces/shared "$$stage/" || { echo "install-daemon: could not stage the workspace; nothing changed"; exit 1; }; \
 	if launchctl print "$$domain/$$label" >/dev/null 2>&1; then \
 		echo "install-daemon: stopping $$label (waits for runs in flight)"; \
 		launchctl bootout "$$domain/$$label" || exit 1; \
 	fi; \
-	mkdir -p "$(AGENCY_RUNTIME_DIR)/bin" "$(AGENCY_RUNTIME_DIR)/workspaces" "$(AGENCY_RUNTIME_DIR)/$(AGENT)" "$(dir $(SYNC_PLIST))" || exit 1; \
 	install -S -m 0755 scripts/start_daemon.sh scripts/run_on_release.sh "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
-	rsync -a --delete workspaces/$(AGENT)/ "$(AGENCY_RUNTIME_DIR)/workspaces/$(AGENT)/" || exit 1; \
-	rsync -a --delete workspaces/shared/ "$(AGENCY_RUNTIME_DIR)/workspaces/shared/" || exit 1; \
+	for dir in $(AGENT) shared; do \
+		rm -rf "$$stage/old-$$dir"; \
+		if [ -e "$$ws/$$dir" ]; then mv "$$ws/$$dir" "$$stage/old-$$dir" || exit 1; fi; \
+		mv "$$stage/$$dir" "$$ws/$$dir" || exit 1; \
+	done; \
 	mv "$$new" "$$plist" || exit 1; \
 	launchctl bootstrap "$$domain" "$$plist" || exit 1; \
 	echo "install-daemon: $$label loaded; log $(AGENCY_RUNTIME_DIR)/$(AGENT)/agency.log"
 
 daemon-health: ## Show an agent's launchd state + /api/health: AGENT=patch
-	@case "$(AGENT)" in patch|scarlett) ;; *) echo "daemon-health: AGENT must be one of $(AGENTS)"; exit 1;; esac
-	@launchctl print "gui/$$(id -u)/com.sc0red.agency-$(AGENT)" | grep -E '^\s+(state|pid|last exit code|runs) ='; \
-	port=$$(sed -n 's/^PORT=//p' workspaces/$(AGENT)/agent.env); curl -fsS "http://127.0.0.1:$$port/api/health"; echo
+	@launchctl print "gui/$$(id -u)/com.sc0red.agency-$(DAEMON_AGENT)" | grep -E '^\s+(state|pid|last exit code|runs) ='
+	@port=$$(sed -n 's/^PORT=//p' "$(AGENCY_RUNTIME_DIR)/workspaces/$(AGENT)/agent.env"); \
+	health=$$(curl -fsS "http://127.0.0.1:$$port/api/health") || { echo "daemon-health: no answer on $$port"; exit 1; }; echo "$$health"
 
 # Layer 2 of the test plan on this Mac: the daemon survives a restart, a
-# Docker restart and a launchd reload. Reboot, sleep and a locked 1Password
+# Postgres outage and a launchd reload. Reboot, sleep and a locked 1Password
 # are the owner's manual steps (README).
 test-survival: ## Layer-2 survival checks against the installed daemon: AGENT=patch
-	@scripts/test_daemon_survival.sh "$(AGENT)"
+	@scripts/test_daemon_survival.sh "$(DAEMON_AGENT)"
 
 check-system-docs: pyyaml
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
