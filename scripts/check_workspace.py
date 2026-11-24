@@ -18,8 +18,8 @@ Neither knows what this team's design promises, so this checks that:
 - every swept stage's stall_minutes outlasts its rule's runTimeoutSecs plus
   queue wait, so the sweep never counts a live run as stalled;
 - the runner per agent (Patch claude-cli, Scarlett codex);
-- MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 1) agrees with each
-  swept board's run slots;
+- MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 2) equals the agent's
+  run slots summed over every swept board (the sweep counts slots per board);
 - each agent's run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no
   Projects permission, so only the board tools move cards, Scarlett's has
   no contents write, so she cannot push, and Patch's has no statuses write;
@@ -87,7 +87,7 @@ ALLOWLIST = {
 }
 
 RUNNER = {"patch": "claude-cli", "scarlett": "codex"}
-CONCURRENCY = {"patch": 2, "scarlett": 1}
+CONCURRENCY = {"patch": 2, "scarlett": 2}
 BOARD_CHECK_CRON = "*/2 * * * *"
 # board.sweep's default; a stage's stall window must outlast its run timeout
 # plus time queued behind a full slot.
@@ -416,6 +416,11 @@ def check_boards(root, stages_by_agent, findings):
     boards = sweep_boards(root, findings)
     if not boards and not any(f.startswith("boards") for f in findings):
         findings.append("boards: no board.sweep step sweeps any board")
+    for agent, expected in CONCURRENCY.items():
+        slots = [(board.get("slots") or {}).get(agent) for _, board in boards]
+        if boards and (not all(isinstance(s, int) and s > 0 for s in slots) or sum(slots) != expected):
+            findings.append(f"boards: slots.{agent} over the swept boards is {slots!r}, must sum to "
+                            f"{expected} (MAX_CONCURRENT_RUNS in agent.env)")
     for name, board in boards:
         if HOTFIX_COLUMN in (board.get("stages") or {}):
             for entry in board.get("repos") or []:
@@ -427,10 +432,6 @@ def check_boards(root, stages_by_agent, findings):
             findings.append(f"boards/{name}: project must be 'owner/number', got {board.get('project')!r}")
         if not board.get("repos"):
             findings.append(f"boards/{name}: lists no repos")
-        for agent, expected in CONCURRENCY.items():
-            slots = (board.get("slots") or {}).get(agent)
-            if slots != expected:
-                findings.append(f"boards/{name}: slots.{agent} is {slots!r}, expected {expected} (agent.env)")
         if REVIEWED_COLUMN not in (board.get("stages") or {}):
             findings.append(f"boards/{name}: no {REVIEWED_COLUMN} stage, so no PR on it gets "
                             f"Scarlett's review")
@@ -653,7 +654,7 @@ def self_test(repo_root):
             ("no-code-review", lambda b: b[name]["stages"].pop("Code Review"), None,
              "no Code Review stage"),
             ("hotfix-without-production", no_production, None, "names no production_branch"),
-            ("unknown-board", None, sweep_arg("winston"), "must name a board in boards.json"),
+            ("unknown-board", None, sweep_arg("no-such-board"), "must name a board in boards.json"),
             ("inline-board", None, sweep_arg({"project": "neurobloom-lilly/2"}),
              "must name a board in boards.json"),
             ("unswept-board", lambda b: b.__setitem__("spare", copy.deepcopy(b[name])), None,

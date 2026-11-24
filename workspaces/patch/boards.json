@@ -25,6 +25,32 @@
       },
       "Hotfix": { "agent": "patch", "task_type": "hotfix", "stall_minutes": 300 }
     },
-    "slots": { "patch": 2, "scarlett": 1 }
+    "slots": { "patch": 1, "scarlett": 1 }
+  },
+  "winston": {
+    "project": "SC0RED/1",
+    "repos": [
+      { "repo": "SC0RED/winston-agency", "production_branch": "main" },
+      { "repo": "SC0RED/agency-tools", "production_branch": "main" },
+      { "repo": "SC0RED/Agency", "production_branch": "production" }
+    ],
+    "stages": {
+      "Planning": { "agent": "patch", "task_type": "plan", "stall_minutes": 120 },
+      "Plan Review": { "agent": "scarlett", "task_type": "plan-review", "stall_minutes": 90 },
+      "In Development": { "agent": "patch", "task_type": "build", "stall_minutes": 300 },
+      "Code Review": {
+        "agent": "patch",
+        "task_type": "code-review",
+        "stall_minutes": 240,
+        "reviewer": {
+          "agent": "scarlett",
+          "task_type": "code-review",
+          "status_app": "sc0red-scarlett",
+          "status": "scarlett/review"
+        }
+      },
+      "Hotfix": { "agent": "patch", "task_type": "hotfix", "stall_minutes": 300 }
+    },
+    "slots": { "patch": 1, "scarlett": 1 }
   }
 }
