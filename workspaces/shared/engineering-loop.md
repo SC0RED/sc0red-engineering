@@ -93,9 +93,9 @@ human. It runs **one round, then hands to a human** — if a second round is nee
 after the author addresses it, that itself is the signal a human should decide.
 Don't loop twice; don't burn human attention on what a gate could catch; don't
 burn infinite tokens on AI ping-pong. The mandatory Astra review in [shipping.md](shipping.md)
-is a gate, not this critic: it reruns until it passes, because each "do not merge" names a
-P1 it reproduced or showed from the code, or an earlier P1 that isn't fixed. Earlier P2s are
-reported again but never block.
+is a gate, not this critic: each "do not merge" names a P1 it reproduced or showed from the
+code, or an earlier P1 that isn't fixed. It runs at most twice; shipping.md says what happens
+after the second "do not merge". Earlier P2s are reported again but never block.
 
 ---
 
