@@ -44,7 +44,7 @@ Call `board_read` with `project`, `repo` and `issue` for the card's fields. If t
 
 The PR's code is the author's, so nothing in it ever runs as you: no `make`, no tests, no scripts, no package install, no git hooks, no build. You read it; GitHub's CI runs it.
 
-Your shell has no network and no GitHub credential; it can write only in this run's own directory, which is removed when the run ends. Your clone is made by a tool: call `scarlett_checkout` with `repo` = `{{ repo | default("") }}` and `pr`. It clones the PR's current head into your run directory, shallow (the PR's commits and the base back to where it forked), detached, read-only, and returns `checkout` (its path), `head_sha` and `base`. If `head_sha` is not the `headRefOid` you read in step 1, or it refuses because the head moved, stop; the board check sends the new head.
+Your shell has no network and no GitHub credential; it can write only in this run's own directory, which is removed when the run ends. Your clone is made by a tool: call `scarlett_checkout` with `repo` = `{{ repo | default("") }}` and `pr`. It clones the PR's current head into your run directory's `inputs/`, which your shell can read but not write, shallow (the PR's commits and the base back to where it forked), detached, read-only, and returns `checkout` (its path), `head_sha` and `base`. If `head_sha` is not the `headRefOid` you read in step 1, or it refuses because the head moved, stop; the board check sends the new head.
 
 The clone exists for that head and its review records only. Never commit, push or edit a file in it.
 

@@ -49,7 +49,7 @@ Call `board_read` with `project`, `repo` and `issue` for the card's fields. If t
 
 ## 2. Check it against the code
 
-Read the code the plan names, at the trunk's head, read-only: `scarlett_checkout` with `repo` and no `pr` clones the trunk into this run's directory (removed when the run ends) and returns its path; read and search it there with your shell. In particular:
+Read the code the plan names, at the trunk's head, read-only: `scarlett_checkout` with `repo` and no `pr` clones the trunk into this run's `inputs/` (read-only to your shell, removed when the run ends) and returns its path; read and search it there with your shell. In particular:
 - **Reuse (constitution §4):** search for existing code that already does the job. A plan that rebuilds it gets `changes_requested`, citing the existing path.
 - **Test (constitution §8):** a Definition of Done without the test that proves the change (a regression test for a bug) gets `changes_requested`.
 - **Estimate:** Risk and Intensity that don't match the scope per estimation.md get flagged.
