@@ -133,11 +133,12 @@ install-daemon: ## Install + (re)load an agent's daemon: AGENT=patch
 	plutil -lint -s "$$new" || { echo "install-daemon: rendered plist is invalid; nothing changed"; exit 1; }; \
 	rm -rf "$$stage" && mkdir -p "$$stage" || exit 1; \
 	cp -R workspaces/$(AGENT) workspaces/shared "$$stage/" || { echo "install-daemon: could not stage the workspace; nothing changed"; exit 1; }; \
+	install -m 0755 scripts/start_daemon.sh scripts/run_on_release.sh "$$stage/" || { echo "install-daemon: could not stage the launchers; nothing changed"; exit 1; }; \
 	if launchctl print "$$domain/$$label" >/dev/null 2>&1; then \
 		echo "install-daemon: stopping $$label (waits for runs in flight)"; \
 		launchctl bootout "$$domain/$$label" || exit 1; \
 	fi; \
-	install -S -m 0755 scripts/start_daemon.sh scripts/run_on_release.sh "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
+	mv "$$stage/start_daemon.sh" "$$stage/run_on_release.sh" "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
 	for dir in $(AGENT) shared; do \
 		rm -rf "$$stage/old-$$dir"; \
 		if [ -e "$$ws/$$dir" ]; then mv "$$ws/$$dir" "$$stage/old-$$dir" || exit 1; fi; \
@@ -150,7 +151,7 @@ install-daemon: ## Install + (re)load an agent's daemon: AGENT=patch
 daemon-health: ## Show an agent's launchd state + /api/health: AGENT=patch
 	@launchctl print "gui/$$(id -u)/com.sc0red.agency-$(DAEMON_AGENT)" | grep -E '^\s+(state|pid|last exit code|runs) ='
 	@port=$$(sed -n 's/^PORT=//p' "$(AGENCY_RUNTIME_DIR)/workspaces/$(AGENT)/agent.env"); \
-	health=$$(curl -fsS "http://127.0.0.1:$$port/api/health") || { echo "daemon-health: no answer on $$port"; exit 1; }; echo "$$health"
+	health=$$(curl -fsS --max-time 5 "http://127.0.0.1:$$port/api/health") || { echo "daemon-health: no answer on $$port"; exit 1; }; echo "$$health"
 
 # Layer 2 of the test plan on this Mac: the daemon survives a restart, a
 # Postgres outage and a launchd reload. Reboot, sleep and a locked 1Password

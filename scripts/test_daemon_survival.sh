@@ -37,7 +37,7 @@ utc_now() { date -u '+%Y-%m-%d %H:%M:%S+00'; }
 
 wait_healthy() {
   local deadline=$((SECONDS + 120))
-  until curl -fsS "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; do
+  until curl -fsS --max-time 5 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; do
     [ "$SECONDS" -lt "$deadline" ] || fail "$1: /api/health on $port did not answer within 120s"
     sleep 2
   done
@@ -85,16 +85,19 @@ wait_written "daemon restart" "$since"
 before=$after
 offset=$(wc -c <"$log")
 down=$(utc_now)
+# However the test ends while the shared database is down, it comes back.
+trap 'docker start "$CONTAINER" >/dev/null' EXIT
 docker stop "$CONTAINER" >/dev/null
 pass "postgres outage: $CONTAINER stopped"
 deadline=$((SECONDS + WAIT_SECS))
-until tail -c "+$((offset + 1))" "$log" | grep -q '"schedule stopped in preRun'; do
-  [ "$SECONDS" -lt "$deadline" ] || { docker start "$CONTAINER" >/dev/null; fail "postgres outage: no board check fired within ${WAIT_SECS}s"; }
+until tail -c "+$((offset + 1))" "$log" | grep '"schedule stopped in preRun' >/dev/null; do
+  [ "$SECONDS" -lt "$deadline" ] || fail "postgres outage: no board check fired within ${WAIT_SECS}s"
   sleep 5
 done
 pass "postgres outage: a board check fired with the database down"
 up=$(utc_now)
 docker start "$CONTAINER" >/dev/null
+trap - EXIT
 wait_postgres "postgres outage"
 pass "postgres outage: $CONTAINER is back"
 wait_healthy "postgres outage"
@@ -104,7 +107,7 @@ pass "postgres outage: daemon kept running (pid $before)"
 # stamped with the drain's time (Agency inserts buffered rows anew), so the
 # proof is the drain in the log, an empty buffer and the rows since $up.
 wait_written "postgres outage" "$up"
-tail -c "+$((offset + 1))" "$log" | grep -q '"events: drained buffer rows after recovery"' \
+tail -c "+$((offset + 1))" "$log" | grep '"events: drained buffer rows after recovery"' >/dev/null \
   || fail "postgres outage: the daemon never drained its events buffer"
 [ ! -s "$RUNTIME/$agent/events-buffer.jsonl" ] || fail "postgres outage: events left in the buffer"
 [ "$(board_check_events "$down" 'infinity')" -ge 2 ] || fail "postgres outage: the buffered event is not in the database"

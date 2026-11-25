@@ -418,7 +418,7 @@ def check_boards(root, stages_by_agent, findings):
         findings.append("boards: no board.sweep step sweeps any board")
     for agent, expected in CONCURRENCY.items():
         slots = [(board.get("slots") or {}).get(agent) for _, board in boards]
-        if boards and (not all(isinstance(s, int) and s > 0 for s in slots) or sum(slots) != expected):
+        if boards and (not all(type(s) is int and s > 0 for s in slots) or sum(slots) != expected):
             findings.append(f"boards: slots.{agent} over the swept boards is {slots!r}, must sum to "
                             f"{expected} (MAX_CONCURRENT_RUNS in agent.env)")
     for name, board in boards:
