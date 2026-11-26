@@ -52,7 +52,7 @@ The clone exists for that head and its review records only. Never commit, push o
 
 - **CI:** wait for the checks on the head to finish: call `github_pr_check_runs` (`repo`, `pull_number`) about once a minute until every check run on `headRefOid` has a `conclusion`, then confirm every one is success. CI runs the repo's bare `make` on every PR; a failed check is a finding, with its name and the failing step, which `github_job_steps` (`repo`, `job_id` = the check run's `id`) names.
 - **Diff:** in your clone, read `git diff origin/<base>...HEAD` against the review core and the plan.
-- **Astra:** call `scarlett_astra_review` with `repo`, `pr` and `head_sha` (from `scarlett_checkout`). It runs the gate's Astra review from your clone, outside your sandbox, with the PR and the issues it closes (the approved plan, or a hotfix's defect) as its context, and records a "merge" in your clone for the status. It takes several minutes. It returns `merge` and the full `verdict`; read the verdict against the review core. If it refuses because the head moved, stop as above; for any other refusal, call `board_block` with its reason.
+- **Astra:** call `scarlett_astra_review` with `repo`, `pr` and `head_sha` (from `scarlett_checkout`). It runs the gate's Astra review from your clone, outside your sandbox, with the PR and every issue it names as its work (the approved plan, or a hotfix's defect) as its context, and records a "merge" in your clone for the status. It takes several minutes. It returns `merge` and the full `verdict`; read the verdict against the review core. If it refuses because the head moved, stop as above; for any other refusal, call `board_block` with its reason.
 
 ## 4. Verdict
 
