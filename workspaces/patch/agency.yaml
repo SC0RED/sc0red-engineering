@@ -69,8 +69,9 @@ routing:
           # (the branch a hotfix's fix must target and merge into), which
           # agent and stage each column dispatches, how long a dispatch with
           # no known outcome holds its slot (stall_minutes, longer than the
-          # stage rule's runTimeoutSecs plus queue wait), and run slots (which
-          # must equal MAX_CONCURRENT_RUNS in each agent.env). Who a block
+          # stage rule's runTimeoutSecs plus queue wait), and run slots (the
+          # sweep counts them per board, so each agent's slots summed over
+          # every board must equal MAX_CONCURRENT_RUNS in its agent.env). Who a block
           # mentions is BOARD_NOTIFY_LOGIN in agent.env.
           # Code Review has two turns per PR head: Scarlett (the reviewer)
           # first; Patch once her scarlett/review/<base> status, posted by the
@@ -90,12 +91,14 @@ routing:
           # card across stages: board.open_for_review's registration relies
           # on it because only the card's current column's stage can
           # register (its column guard refuses the others).
-          # Winston (SC0RED/1, repos Agency, agency-tools, winston-agency)
-          # joins with its own step after NeuroBloom has run end to end.
           - name: sweepNeurobloom
             tool: agency_tools.board.sweep
             args:
               board: neurobloom
+          - name: sweepWinston
+            tool: agency_tools.board.sweep
+            args:
+              board: winston
           - name: stop
             tool: agency_tools.predicate.always_stop
             args:

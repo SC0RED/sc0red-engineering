@@ -1,5 +1,6 @@
 .PHONY: check check-structure no-symlinks check-workspace test-sync check-system-docs \
-        validate-workspace tool-refs vendor-shared pyyaml sync-tools install-sync help
+        validate-workspace tool-refs vendor-shared pyyaml sync-tools install-sync help \
+        install-agency team-db install-daemon daemon-health test-survival
 
 .DEFAULT_GOAL := check
 
@@ -82,6 +83,81 @@ install-sync: ## Install the scripts + load the launchd job that runs the sync
 	fi; \
 	launchctl bootstrap "$$domain" "$(SYNC_PLIST)" || exit 1; \
 	echo "install-sync: $(SYNC_LABEL) loaded; log $(AGENCY_RUNTIME_DIR)/sync.log"
+
+# Install the agency binary the daemons run, with the Agency scripts that go
+# with it (the MCP server the runs use, database provisioning), from an Agency
+# checkout whose target/release/agency is built from that checkout's HEAD. The
+# new copy is staged beside the old and swapped in by renames. Restart the
+# daemons after (make install-daemon), and rerun make team-db when the
+# release has new migrations.
+AGENCY_SRC ?=
+AGENCY_SCRIPTS := agency_mcp_server.py provision_database.sh lifecycle_provision.sql
+install-agency: ## Install agency from AGENCY_SRC=<Agency checkout with a release build>
+	@test -x "$(AGENCY_SRC)/target/release/agency" || { echo "install-agency: AGENCY_SRC=$(AGENCY_SRC) has no target/release/agency"; exit 1; }
+	@dest="$(AGENCY_RUNTIME_DIR)/agency"; stage="$$dest.new"; old="$$dest.previous"; \
+	rm -rf "$$stage" "$$old" && mkdir -p "$$stage/scripts" || exit 1; \
+	install -m 0755 "$(AGENCY_SRC)/target/release/agency" "$$stage/agency" || exit 1; \
+	for script in $(AGENCY_SCRIPTS); do install -m 0644 "$(AGENCY_SRC)/scripts/$$script" "$$stage/scripts/" || exit 1; done; \
+	chmod 0755 "$$stage/scripts/provision_database.sh"; \
+	echo "sha=$$(git -C "$(AGENCY_SRC)" rev-parse HEAD)" > "$$stage/build.info" || exit 1; \
+	if [ -e "$$dest" ]; then mv "$$dest" "$$old" || exit 1; fi; \
+	mv "$$stage" "$$dest" || exit 1; rm -rf "$$old"; \
+	echo "install-agency: $$dest at $$(cat "$$dest/build.info")"
+
+team-db: ## Create/start the team Postgres, then migrate + provision it (idempotent)
+	@scripts/team_db.sh
+
+# Install one agent's daemon: its workspace beside the vendored shared/, the
+# launcher, and its launchd job (launchd/com.sc0red.agency-daemon.plist,
+# label com.sc0red.agency-<agent>), then (re)load the job. Everything is
+# staged first; only then is a loaded job booted out (which waits for the
+# daemon to drain its runs), the staged copies renamed into place and the job
+# bootstrapped. PATH is the directories of the tools a run uses, as this shell
+# resolves them. An agent's agent.env must carry the daemon settings (PORT and
+# the rest); Scarlett's gains them with the Codex bridge.
+AGENT ?=
+DAEMON_TOOLS := claude op gh git python3 uv make docker cargo node
+DAEMON_AGENT = $(if $(filter $(AGENT),$(AGENTS)),$(AGENT),$(error AGENT must be one of $(AGENTS)))
+install-daemon: ## Install + (re)load an agent's daemon: AGENT=patch
+	@grep -q '^PORT=' workspaces/$(DAEMON_AGENT)/agent.env || { echo "install-daemon: workspaces/$(AGENT)/agent.env has no daemon settings (PORT)"; exit 1; }
+	@test -x "$(AGENCY_RUNTIME_DIR)/agency/agency" || { echo "install-daemon: no agency at $(AGENCY_RUNTIME_DIR)/agency; run make install-agency"; exit 1; }
+	@for tool in $(DAEMON_TOOLS); do command -v $$tool >/dev/null || { echo "install-daemon: no $$tool on PATH"; exit 1; }; done; \
+	path=$$(for tool in $(DAEMON_TOOLS); do dirname "$$(command -v $$tool)"; done | awk '!seen[$$0]++' | paste -sd: -):/usr/bin:/bin:/usr/sbin:/sbin; \
+	label="com.sc0red.agency-$(AGENT)"; plist="$(HOME)/Library/LaunchAgents/$$label.plist"; domain="gui/$$(id -u)"; \
+	ws="$(AGENCY_RUNTIME_DIR)/workspaces"; stage="$$ws/.staging-$(AGENT)"; new="$$plist.new"; \
+	trap 'rm -rf "$$new" "$$stage"' EXIT; \
+	mkdir -p "$(AGENCY_RUNTIME_DIR)/bin" "$$ws" "$(AGENCY_RUNTIME_DIR)/$(AGENT)" "$(dir $(SYNC_PLIST))" || exit 1; \
+	sed -e "s|@LABEL@|$$label|g" -e "s|@LAUNCHER@|$(AGENCY_RUNTIME_DIR)/bin/start_daemon.sh|g" -e "s|@AGENT@|$(AGENT)|g" \
+		-e "s|@LOG@|$(AGENCY_RUNTIME_DIR)/$(AGENT)/agency.log|g" -e "s|@RUNTIME@|$(AGENCY_RUNTIME_DIR)|g" \
+		-e "s|@PATH@|$$path|g" launchd/com.sc0red.agency-daemon.plist > "$$new" || exit 1; \
+	plutil -lint -s "$$new" || { echo "install-daemon: rendered plist is invalid; nothing changed"; exit 1; }; \
+	rm -rf "$$stage" && mkdir -p "$$stage" || exit 1; \
+	cp -R workspaces/$(AGENT) workspaces/shared "$$stage/" || { echo "install-daemon: could not stage the workspace; nothing changed"; exit 1; }; \
+	install -m 0755 scripts/start_daemon.sh scripts/run_on_release.sh "$$stage/" || { echo "install-daemon: could not stage the launchers; nothing changed"; exit 1; }; \
+	if launchctl print "$$domain/$$label" >/dev/null 2>&1; then \
+		echo "install-daemon: stopping $$label (waits for runs in flight)"; \
+		launchctl bootout "$$domain/$$label" || exit 1; \
+	fi; \
+	mv "$$stage/start_daemon.sh" "$$stage/run_on_release.sh" "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
+	for dir in $(AGENT) shared; do \
+		rm -rf "$$stage/old-$$dir"; \
+		if [ -e "$$ws/$$dir" ]; then mv "$$ws/$$dir" "$$stage/old-$$dir" || exit 1; fi; \
+		mv "$$stage/$$dir" "$$ws/$$dir" || exit 1; \
+	done; \
+	mv "$$new" "$$plist" || exit 1; \
+	launchctl bootstrap "$$domain" "$$plist" || exit 1; \
+	echo "install-daemon: $$label loaded; log $(AGENCY_RUNTIME_DIR)/$(AGENT)/agency.log"
+
+daemon-health: ## Show an agent's launchd state + /api/health: AGENT=patch
+	@launchctl print "gui/$$(id -u)/com.sc0red.agency-$(DAEMON_AGENT)" | grep -E '^\s+(state|pid|last exit code|runs) ='
+	@port=$$(sed -n 's/^PORT=//p' "$(AGENCY_RUNTIME_DIR)/workspaces/$(AGENT)/agent.env"); \
+	health=$$(curl -fsS --max-time 5 "http://127.0.0.1:$$port/api/health") || { echo "daemon-health: no answer on $$port"; exit 1; }; echo "$$health"
+
+# Layer 2 of the test plan on this Mac: the daemon survives a restart, a
+# Postgres outage and a launchd reload. Reboot, sleep and a locked 1Password
+# are the owner's manual steps (README).
+test-survival: ## Layer-2 survival checks against the installed daemon: AGENT=patch
+	@scripts/test_daemon_survival.sh "$(DAEMON_AGENT)"
 
 check-system-docs: pyyaml
 	@test -d "$(ENGINEERING_STANDARDS)/shared" || { echo "ENGINEERING_STANDARDS=$(ENGINEERING_STANDARDS) has no shared/"; exit 1; }
