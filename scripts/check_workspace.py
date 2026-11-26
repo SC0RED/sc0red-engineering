@@ -26,9 +26,11 @@ Neither knows what this team's design promises, so this checks that:
 - each agent.env points AGENCY_TOOLS_ROOT, AGENCY_PYTHON_BINARY and
   AGENCY_CONTRACTS_DIR at the release scripts/sync_agency_tools.sh installs,
   so both daemons run the agency-tools and contracts the box runs;
-- only Scarlett's code-review stage holds scarlett.post_review (the one tool
-  outside agency_tools.board.* any stage holds), and only Scarlett's workspace
-  names it or scarlett-review, the hook it runs to post her
+- the tools outside agency_tools.board.* a stage holds are pinned per stage
+  (only Scarlett's stages hold any: the GitHub reads, scarlett.checkout and
+  scarlett.astra_review her credential-free Codex shell cannot do itself);
+  only her code-review stage holds scarlett.post_review, and only her
+  workspace names it or scarlett-review, the hook it runs to post her
   status with her App key, so Patch never runs it;
 - one routing.internal rule per stage, each running at most one job per card
   (singleFlightKey '{{ repo }}#{{ issue }}', fail closed, a lock TTL that
@@ -121,8 +123,27 @@ POST_REVIEW = "agency_tools.scarlett.post_review"
 REVIEW_POSTER = "scarlett-review"
 REVIEW_POSTERS = (REVIEW_POSTER, "scarlett_post_review", "scarlett.post_review")
 REVIEW_POSTER_OWNER = "scarlett"
-# The one tool outside agency_tools.board.* a stage may hold, pinned per stage.
-NON_BOARD_TOOLS = {("scarlett", "code-review"): {POST_REVIEW}}
+# The tools outside agency_tools.board.* a stage may hold, pinned per stage.
+# Scarlett's Codex shell has no network and no credential, so she reads
+# GitHub, clones code and runs Astra only through these.
+NON_BOARD_TOOLS = {
+    ("scarlett", "plan-review"): {
+        "agency_tools.github.issue_view",
+        "agency_tools.github.issue_create",
+        "agency_tools.scarlett.checkout",
+    },
+    ("scarlett", "code-review"): {
+        "agency_tools.github.issue_view",
+        "agency_tools.github.pr_view",
+        "agency_tools.github.pr_check_runs",
+        "agency_tools.github.job_steps",
+        "agency_tools.github.commit_statuses",
+        "agency_tools.github.pr_comment",
+        "agency_tools.scarlett.checkout",
+        "agency_tools.scarlett.astra_review",
+        POST_REVIEW,
+    },
+}
 # Scarlett runs as the user that can read her App key, so she never executes
 # a PR's code: her workspace never names the make recorder.
 NEVER_RUNS_PR_CODE = {"scarlett": "make-verified"}
@@ -569,10 +590,10 @@ def self_test(repo_root):
         ("patch posts review", "patch", lambda c: internal(c, "code-review")["tools"].append(
             {"module.python": POST_REVIEW}), "only Scarlett posts her status"),
         ("post review off code-review", "scarlett", lambda c: internal(c, "plan-review")["tools"].append(
-            {"module.python": POST_REVIEW}), "the pinned set is []"),
+            {"module.python": POST_REVIEW}), "the pinned set is ['agency_tools.github.issue_create'"),
         ("code-review without post review", "scarlett", lambda c: internal(c, "code-review").__setitem__(
             "tools", [t for t in internal(c, "code-review")["tools"] if t.get("module.python") != POST_REVIEW]),
-         "the pinned set is ['agency_tools.scarlett.post_review']"),
+         "'agency_tools.scarlett.post_review']"),
     ]
     failures = []
     # Scratch under the repo (gitignored .validate.*/), never the boot disk.

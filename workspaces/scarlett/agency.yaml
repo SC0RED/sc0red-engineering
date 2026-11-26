@@ -9,8 +9,10 @@
 #
 # Runner: Codex. Her declared tools reach her through the Codex tool bridge in
 # Agency, which gives `codex exec` the same agency-tools MCP server Claude runs
-# get, limited to the rule's allowlist. Until that bridge ships, the codex runner
-# ignores `tools:` and these rules cannot run as intended.
+# get, limited to the rule's allowlist. Every Codex run's shell writes only in
+# its run directory, has no network and holds no credential, so she reads
+# GitHub, clones code (scarlett.checkout) and runs Astra
+# (scarlett.astra_review) only through these tools, which run outside it.
 #
 # Her run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no Projects
 # and no contents write permission: she moves no card outside her board tools
@@ -56,10 +58,13 @@ routing:
           - module.python: agency_tools.board.read
           - module.python: agency_tools.board.post_verdict
           - module.python: agency_tools.board.block
+          - module.python: agency_tools.github.issue_view
+          - module.python: agency_tools.github.issue_create
+          - module.python: agency_tools.scarlett.checkout
 
-      # Code Review. Read-only: she reads the diff in a read-only checkout of
-      # the head, runs Astra in its read-only sandbox, and reads GitHub's CI
-      # results for the head. She never executes the PR's code, since she runs
+      # Code Review. Read-only: she reads the diff in a read-only clone of the
+      # head (scarlett.checkout), runs Astra on it (scarlett.astra_review), and
+      # reads GitHub's CI results for the head. She never executes the PR's code, since she runs
       # as the user that can read her App key. On CI green and Astra "merge"
       # scarlett.post_review (the gate's scarlett-review hook, refused for any
       # other agent) posts scarlett/review/<base>, the status that lets the PR
@@ -81,4 +86,12 @@ routing:
         tools:
           - module.python: agency_tools.board.read
           - module.python: agency_tools.board.block
+          - module.python: agency_tools.github.issue_view
+          - module.python: agency_tools.github.pr_view
+          - module.python: agency_tools.github.pr_check_runs
+          - module.python: agency_tools.github.job_steps
+          - module.python: agency_tools.github.commit_statuses
+          - module.python: agency_tools.github.pr_comment
+          - module.python: agency_tools.scarlett.checkout
+          - module.python: agency_tools.scarlett.astra_review
           - module.python: agency_tools.scarlett.post_review
