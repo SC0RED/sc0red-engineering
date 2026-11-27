@@ -115,7 +115,7 @@ pass "postgres outage: the event buffered while down was written"
 
 # 3. launchd reload.
 since=$(utc_now)
-launchctl bootout "$domain/$label"
+"$(dirname "$0")/stop_launchd_job.sh" "$domain/$label" || fail "launchd reload: $label did not stop"
 launchctl bootstrap "$domain" "$plist"
 wait_healthy "launchd reload"
 after=$(job_pid)
