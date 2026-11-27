@@ -14,9 +14,12 @@
 # GitHub, clones code (scarlett.checkout) and runs Astra
 # (scarlett.astra_review) only through these tools, which run outside it.
 #
-# Her run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no Projects
-# and no contents write permission: she moves no card outside her board tools
-# and pushes nothing.
+# Her run token comes from each stage rule's githubRunToken: the daemon signs
+# the run a claim for the card's repo, and her GitHub tools get a fresh
+# sc0red-scarlett token from it (her shell has no network, so only the tools
+# use it). It has no Projects and no contents write permission: she moves no
+# card outside her board tools and pushes nothing. Her daemon binds
+# BOARD_GITHUB_APP_ID and BOARD_GITHUB_APP_PRIVATE_KEY to her own App.
 #
 # Separation of duties: Scarlett runs as her own macOS user with her own
 # 1Password service account, the only one that can read the sc0red-scarlett
@@ -49,6 +52,10 @@ routing:
         deliverable: decision
         risk: low
         runTimeoutSecs: 1800
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:read,pull_requests:read,issues:write,actions:read,checks:read,statuses:read,metadata:read
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 3600
         singleFlightFailClosed: true
@@ -78,6 +85,10 @@ routing:
         deliverable: decision
         risk: medium
         runTimeoutSecs: 5400
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:read,pull_requests:read,issues:write,actions:read,checks:read,statuses:read,metadata:read
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 7200
         singleFlightFailClosed: true
