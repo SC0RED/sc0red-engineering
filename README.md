@@ -75,7 +75,7 @@ Shared discipline (the constitution, engineering loop, shipping, review core, is
 
 Bare `make` runs every check:
 
-- `check-structure`: no symlinks, `check_workspace.py` (with its self-test), and `test-sync` (the sync and `run_on_release.sh` against a fake `gh`, a fake `uv` and a local agency-tools origin, in temporary directories only). Actions runs this subset.
+- `check-structure`: no symlinks, `check_workspace.py` (with its self-test), `test-sync` (the sync and `run_on_release.sh` against a fake `gh`, a fake `uv` and a local agency-tools origin, in temporary directories only), and `test-stop-daemon` (`stop_daemon.sh`, which `install-daemon` runs before it swaps anything: bootout, then wait up to 30 minutes until `launchctl print` no longer finds the job, against a fake `launchctl`). Actions runs this subset.
 - `check-system-docs`: each vendored doc in `workspaces/shared/` is byte-identical to `$(ENGINEERING_STANDARDS)/shared`.
 - `validate-workspace`: `agency validate-workspace` on each workspace, staged beside the vendored `shared/`, with `AGENCY_BIN` built from Agency `development`.
 - `tool-refs`: agency-tools' `validate_workspace.py`, so every `module.python` reference resolves in `$(AGENCY_TOOLS)` (by default the synced release under `/Volumes/SSD/agency-runtime/current`).

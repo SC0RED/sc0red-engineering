@@ -1,4 +1,4 @@
-.PHONY: check check-structure no-symlinks check-workspace test-sync check-system-docs \
+.PHONY: check check-structure no-symlinks check-workspace test-sync test-stop-daemon check-system-docs \
         validate-workspace tool-refs vendor-shared pyyaml sync-tools install-sync help \
         install-agency team-db install-daemon daemon-health test-survival
 
@@ -29,7 +29,7 @@ check: check-structure check-system-docs validate-workspace tool-refs ## Every c
 # The checks that need no private sibling checkout: the subset Actions runs,
 # since this repo has no credentials for engineering-standards, agency-tools
 # or Agency.
-check-structure: no-symlinks check-workspace test-sync ## Checks that need no sibling checkout (Actions)
+check-structure: no-symlinks check-workspace test-sync test-stop-daemon ## Checks that need no sibling checkout (Actions)
 
 # The Agency runtime rejects a symlink that escapes the workspace root, and the
 # vendored shared docs are a real sibling directory, never a link.
@@ -52,6 +52,15 @@ test-sync:
 	trap 'rm -rf "$$stage"' EXIT; \
 	TMPDIR="$$stage" python3 scripts/test_sync_agency_tools.py >"$$stage/out" 2>&1 \
 		&& echo "test-sync: OK" || { cat "$$stage/out"; exit 1; }
+
+# scripts/stop_daemon.sh against a fake launchctl (install-daemon waits for
+# launchd to let the old job go before it swaps anything), in a temporary
+# directory under the repo.
+test-stop-daemon:
+	@stage=$$(mktemp -d "$(CURDIR)/.validate.XXXXXX") || { echo "test-stop-daemon: could not make a staging directory"; exit 1; }; \
+	trap 'rm -rf "$$stage"' EXIT; \
+	TMPDIR="$$stage" python3 scripts/test_stop_daemon.py >"$$stage/out" 2>&1 \
+		&& echo "test-stop-daemon: OK" || { cat "$$stage/out"; exit 1; }
 
 # Run the launchd sync job now. Only launchd runs scripts/sync_agency_tools.sh,
 # and it never starts the job while a run is alive, so syncs never overlap;
@@ -134,10 +143,7 @@ install-daemon: ## Install + (re)load an agent's daemon: AGENT=patch
 	rm -rf "$$stage" && mkdir -p "$$stage" || exit 1; \
 	cp -R workspaces/$(AGENT) workspaces/shared "$$stage/" || { echo "install-daemon: could not stage the workspace; nothing changed"; exit 1; }; \
 	install -m 0755 scripts/start_daemon.sh scripts/run_on_release.sh "$$stage/" || { echo "install-daemon: could not stage the launchers; nothing changed"; exit 1; }; \
-	if launchctl print "$$domain/$$label" >/dev/null 2>&1; then \
-		echo "install-daemon: stopping $$label (waits for runs in flight)"; \
-		launchctl bootout "$$domain/$$label" || exit 1; \
-	fi; \
+	scripts/stop_daemon.sh "$$domain/$$label" || { echo "install-daemon: $$label did not stop; nothing was swapped or loaded"; exit 1; }; \
 	mv "$$stage/start_daemon.sh" "$$stage/run_on_release.sh" "$(AGENCY_RUNTIME_DIR)/bin/" || exit 1; \
 	for dir in $(AGENT) shared; do \
 		rm -rf "$$stage/old-$$dir"; \
