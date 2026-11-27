@@ -1,7 +1,7 @@
-"""scripts/stop_daemon.sh against a fake launchctl, and its place in
-make install-daemon.
+"""scripts/stop_launchd_job.sh against a fake launchctl, and its place in
+make install-daemon and make install-sync.
 
-Run: python3 scripts/test_stop_daemon.py   (make test-stop-daemon)
+Run: python3 scripts/test_stop_launchd_job.py   (make test-stop-launchd-job)
 """
 
 import json
@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(HERE, "stop_daemon.sh")
+SCRIPT = os.path.join(HERE, "stop_launchd_job.sh")
 MAKEFILE = os.path.join(HERE, os.pardir, "Makefile")
 SERVICE = "gui/501/com.sc0red.agency-patch"
 
@@ -40,7 +40,7 @@ json.dump(state, open(path, "w"))
 """
 
 
-class StopDaemon(unittest.TestCase):
+class StopLaunchdJob(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         bin_dir = os.path.join(self.dir, "bin")
@@ -51,12 +51,12 @@ class StopDaemon(unittest.TestCase):
         os.chmod(fake, 0o755)
         self.state = os.path.join(self.dir, "state.json")
         self.env = {**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"],
-                    "FAKE_LAUNCHCTL_STATE": self.state, "STOP_DAEMON_POLL_SECS": "0.05"}
+                    "FAKE_LAUNCHCTL_STATE": self.state, "STOP_JOB_POLL_SECS": "0.05"}
 
     def run_script(self, loaded, timeout="5", **state):
         with open(self.state, "w") as handle:
             json.dump({"loaded": loaded, "booted_out": False, **state}, handle)
-        done = subprocess.run([SCRIPT, SERVICE], env={**self.env, "STOP_DAEMON_TIMEOUT_SECS": timeout},
+        done = subprocess.run([SCRIPT, SERVICE], env={**self.env, "STOP_JOB_TIMEOUT_SECS": timeout},
                               capture_output=True, text=True, timeout=30)
         with open(self.state + ".log") as handle:
             return done, handle.read().splitlines()
@@ -86,16 +86,35 @@ class StopDaemon(unittest.TestCase):
         self.assertIn("bootout", done.stderr)
 
 
-class InstallDaemonRecipe(unittest.TestCase):
-    def test_stops_through_the_script_before_any_swap(self):
+class Recipes(unittest.TestCase):
+    def setUp(self):
         with open(MAKEFILE) as handle:
-            text = handle.read()
-        recipe = re.search(r"^install-daemon:.*?\n((?:\t.*\n)+)", text, re.MULTILINE).group(1)
-        self.assertNotIn("launchctl bootout", recipe)
-        stop = recipe.index("scripts/stop_daemon.sh")
+            self.text = handle.read()
+
+    def recipe(self, target):
+        return re.search(rf"^{target}:.*?\n((?:\t.*\n)+)", self.text, re.MULTILINE).group(1)
+
+    def stop(self, recipe):
+        """Where the recipe stops its job; a failed stop ends the recipe."""
+        stop = recipe.index("scripts/stop_launchd_job.sh")
         self.assertIn("exit 1", recipe[stop:recipe.index("\n", stop)])
-        for change in ('mv "$$stage/start_daemon.sh"', 'mv "$$new" "$$plist"', 'launchctl bootstrap'):
-            self.assertLess(stop, recipe.index(change), change)
+        return stop
+
+    def test_every_stop_goes_through_the_script(self):
+        self.assertNotIn("launchctl bootout", self.text)
+
+    def test_install_daemon_stops_before_any_swap(self):
+        recipe = self.recipe("install-daemon")
+        stop = self.stop(recipe)
+        # Every move (the launchers, the workspace swap loop's old-out and new-in,
+        # the plist) and the bootstrap.
+        changes = [m.start() for m in re.finditer(r"\bmv |launchctl bootstrap", recipe)]
+        self.assertEqual(len(changes), 5, changes)
+        self.assertTrue(all(stop < at for at in changes), recipe)
+
+    def test_install_sync_stops_before_bootstrap(self):
+        recipe = self.recipe("install-sync")
+        self.assertLess(self.stop(recipe), recipe.index("launchctl bootstrap"))
 
 
 if __name__ == "__main__":
