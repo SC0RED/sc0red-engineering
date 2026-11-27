@@ -28,7 +28,7 @@ deadline=$((SECONDS + timeout))
 while loaded; do
   if [ "$SECONDS" -ge "$deadline" ]; then
     echo "stop_launchd_job: $service is still registered ${timeout}s after bootout, so it is still finishing a run." \
-      "Nothing else was changed. Once \`launchctl print $service\` fails, run this again." >&2
+      "It stops when that run ends and is not reloaded. Once \`launchctl print $service\` fails, run the install again." >&2
     exit 1
   fi
   sleep "$interval"
