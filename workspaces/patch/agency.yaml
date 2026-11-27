@@ -23,8 +23,12 @@
 #
 # Card moves happen only inside the board.* tools, which hold the only token
 # with Projects permission. Patch's own run token (the one `gh` and git use in
-# Bash) is minted with GITHUB_RUN_TOKEN_PERMISSIONS from agent.env, which has
-# no Projects permission, so `gh project item-edit` cannot move a card.
+# Bash, and his GitHub tools) comes from each stage rule's githubRunToken: the
+# daemon signs the run a claim for the card's repo and mints a fresh
+# sc0red-patch token on every use, with those permissions and no Projects
+# permission, so `gh project item-edit` cannot move a card. The App's id and
+# key (BOARD_GITHUB_APP_ID, BOARD_GITHUB_APP_PRIVATE_KEY in op-bindings.json)
+# never reach the run.
 #
 # Concurrency (MAX_CONCURRENT_RUNS) is a daemon setting, not a workspace one;
 # it lives in agent.env beside this file.
@@ -116,6 +120,10 @@ routing:
         deliverable: action
         risk: low
         runTimeoutSecs: 2700
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 4500
         singleFlightFailClosed: true
@@ -137,6 +145,10 @@ routing:
         deliverable: action
         risk: medium
         runTimeoutSecs: 10800
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 12600
         singleFlightFailClosed: true
@@ -158,6 +170,10 @@ routing:
         deliverable: action
         risk: medium
         runTimeoutSecs: 7200
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 9000
         singleFlightFailClosed: true
@@ -178,6 +194,10 @@ routing:
         deliverable: action
         risk: high
         runTimeoutSecs: 10800
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 12600
         singleFlightFailClosed: true

@@ -20,9 +20,15 @@ Neither knows what this team's design promises, so this checks that:
 - the runner per agent (Patch claude-cli, Scarlett codex);
 - MAX_CONCURRENT_RUNS in agent.env (Patch 2, Scarlett 2) equals the agent's
   run slots summed over every swept board (the sweep counts slots per board);
-- each agent's run token (GITHUB_RUN_TOKEN_PERMISSIONS in agent.env) has no
-  Projects permission, so only the board tools move cards, Scarlett's has
-  no contents write, so she cannot push, and Patch's has no statuses write;
+- every stage rule declares githubRunToken, so each run gets a token minted
+  for its card's repo as the agent's own App (BOARD_GITHUB_APP_ID and
+  BOARD_GITHUB_APP_PRIVATE_KEY, which each daemon binds to its own App), and
+  that token has no Projects permission, so only the board tools move cards;
+  Scarlett's has no contents write, so she cannot push, and Patch's has no
+  statuses write;
+- a stage template that runs gh says to call it as
+  `GH_TOKEN=$("$AGENCY_BINARY" github-token) gh ...`: Agency gives a stage
+  run's gh no token and an empty config, so a plain gh has no credential;
 - each agent.env points AGENCY_TOOLS_ROOT, AGENCY_PYTHON_BINARY and
   AGENCY_CONTRACTS_DIR at the release scripts/sync_agency_tools.sh installs,
   so both daemons run the agency-tools and contracts the box runs;
@@ -104,7 +110,10 @@ REVIEWED_COLUMN = "Code Review"
 AUTHOR = {"agent": "patch", "task_type": "code-review"}
 REVIEWER = {"agent": "scarlett", "task_type": "code-review", "status_app": "sc0red-scarlett",
             "status": "scarlett/review"}
-TOKEN_APP = {"patch": "sc0red-patch", "scarlett": "sc0red-scarlett"}
+#: The secrets a stage rule's githubRunToken mints its run's token with: the
+#: names the board tools read, which each daemon binds to its own App
+#: (sc0red-patch, sc0red-scarlett), so a run's token is its own agent's.
+RUN_TOKEN_SECRETS = {"appIdSecret": "BOARD_GITHUB_APP_ID", "appKeySecret": "BOARD_GITHUB_APP_PRIVATE_KEY"}
 # Neither run token may move a card; Scarlett's may not push.
 FORBIDDEN_PERMISSIONS = {
     "patch": {"organization_projects", "repository_projects"},
@@ -183,6 +192,23 @@ def read_env(path):
     return values
 
 
+#: How a stage run calls gh: its claim buys the token on each call (Agency's
+#: `agency github-token`). Agency gives gh no GH_TOKEN and an empty config,
+#: so a plain `gh` there has no credential.
+RUN_TOKEN_GH = 'GH_TOKEN=$("$AGENCY_BINARY" github-token) gh'
+GH_COMMAND = re.compile(r"`gh\s")
+
+
+def check_run_token_gh(agent, ws, rule_name, template, findings):
+    """A stage template that runs gh tells the run to call it with its run token."""
+    path = os.path.join(ws, template or "")
+    if not os.path.isfile(path):
+        return
+    text = open(path, encoding="utf-8").read()
+    if GH_COMMAND.search(text) and RUN_TOKEN_GH not in text:
+        findings.append(f"{agent}/{rule_name}: {template} runs gh but never says to call it as `{RUN_TOKEN_GH} ...`")
+
+
 def check_template(agent, ws, rule_name, template, cited, findings):
     path = os.path.join(ws, template or "")
     if not template or not os.path.isfile(path):
@@ -241,6 +267,7 @@ def check_agent(agent, ws, cited, findings):
             if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
                 findings.append(f"{agent}/{name}: runTimeoutSecs must be a positive integer, got {timeout!r}")
             check_single_flight(agent, name, rule, stages[stage], findings)
+            check_run_token(agent, name, rule, findings)
             pinned = ALLOWLIST.get((agent, stage))
             granted = tool_names(rule.get("tools"))
             outside = [t for t in granted if not t.startswith(BOARD)]
@@ -258,6 +285,7 @@ def check_agent(agent, ws, cited, findings):
             if rule.get("preRun") or rule.get("preRunTools"):
                 findings.append(f"{agent}/{name}: stage rules take no preRun")
             check_template(agent, ws, name, rule.get("messageTemplate"), cited, findings)
+            check_run_token_gh(agent, ws, name, rule.get("messageTemplate"), findings)
 
     for (pinned_agent, pinned_stage) in ALLOWLIST:
         if pinned_agent == agent and pinned_stage not in stages:
@@ -310,7 +338,6 @@ def check_agent(agent, ws, cited, findings):
         findings.append(f"{agent}: agent.env REDIS_URL must be redis://127.0.0.1:6379/<db> (db 0-15, no "
                         f"leading zeros), the agent's own database, got {redis!r}; the single-flight "
                         f"locks live there")
-    check_run_token(agent, env, findings)
     check_review_poster(agent, ws, findings)
     return stages
 
@@ -349,26 +376,35 @@ def check_single_flight(agent, name, rule, timeout, findings):
                         f"{QUEUE_WAIT_SECS}s of queue wait ({floor}), or the lock lapses under a live run")
 
 
-def check_run_token(agent, env, findings):
-    if env.get("GITHUB_RUN_TOKEN_APP") != TOKEN_APP[agent]:
-        findings.append(f"{agent}: agent.env GITHUB_RUN_TOKEN_APP is {env.get('GITHUB_RUN_TOKEN_APP')!r}, "
-                        f"expected {TOKEN_APP[agent]!r}")
-    raw = env.get("GITHUB_RUN_TOKEN_PERMISSIONS")
+def check_run_token(agent, name, rule, findings):
+    """A stage run's GitHub access is its rule's githubRunToken: a token
+    minted per run for the card's repo, as the agent's own App, with no
+    permission that could move a card (or, for Scarlett, push)."""
+    where = f"{agent}/{name}"
+    token = rule.get("githubRunToken")
+    if not isinstance(token, dict):
+        findings.append(f"{where}: no githubRunToken, so the run has no GitHub access of its own")
+        return
+    for key, want in RUN_TOKEN_SECRETS.items():
+        if token.get(key) != want:
+            findings.append(f"{where}: githubRunToken {key} is {token.get(key)!r}, expected {want!r} "
+                            f"(the daemon binds it to {agent}'s own App)")
+    raw = token.get("permissions")
     if not raw:
-        findings.append(f"{agent}: agent.env has no GITHUB_RUN_TOKEN_PERMISSIONS, so the run token's scope is unstated")
+        findings.append(f"{where}: githubRunToken has no permissions, so the run token's scope is unstated")
         return
     permissions = {}
     for item in raw.split(","):
-        name, _, level = item.strip().partition(":")
+        permission, _, level = item.strip().partition(":")
         if level not in ("read", "write"):
-            findings.append(f"{agent}: GITHUB_RUN_TOKEN_PERMISSIONS entry {item.strip()!r} is not name:read|write")
+            findings.append(f"{where}: githubRunToken permission {item.strip()!r} is not name:read|write")
             continue
-        permissions[name] = level
-    for name in sorted(set(permissions) & FORBIDDEN_PERMISSIONS[agent]):
-        findings.append(f"{agent}: run token has {name}; only the board tools may move a card")
-    for name, reason in sorted(READ_ONLY_PERMISSIONS.get(agent, {}).items()):
-        if permissions.get(name) == "write":
-            findings.append(f"{agent}: run token has {name}:write; {reason}")
+        permissions[permission] = level
+    for permission in sorted(set(permissions) & FORBIDDEN_PERMISSIONS[agent]):
+        findings.append(f"{where}: run token has {permission}; only the board tools may move a card")
+    for permission, reason in sorted(READ_ONLY_PERMISSIONS.get(agent, {}).items()):
+        if permissions.get(permission) == "write":
+            findings.append(f"{where}: run token has {permission}:write; {reason}")
 
 
 def check_review_poster(agent, ws, findings):
@@ -706,30 +742,41 @@ def self_test(repo_root):
         else:
             if not any("patch" in f and "agency.yaml" in f for f in found):
                 failures.append(f"no-patch-config: a missing agency.yaml not flagged, got {found}")
-        for label, agent, permissions, expect in [
-            ("projects-token", "patch", "contents:write,organization_projects:write", "organization_projects"),
-            ("scarlett-push", "scarlett", "contents:write,issues:write", "contents:write"),
+        for label, agent, change, expect in [
+            ("projects-token", "patch",
+             lambda token: token.update(permissions="contents:write,organization_projects:write"),
+             "organization_projects"),
+            ("scarlett-push", "scarlett",
+             lambda token: token.update(permissions="contents:write,issues:write"), "contents:write"),
+            ("patch-statuses", "patch",
+             lambda token: token.update(permissions=token["permissions"].replace("statuses:read", "statuses:write")),
+             "statuses:write"),
+            ("other-app", "patch", lambda token: token.update(appKeySecret="SCARLETT_APP_KEY"), "appKeySecret"),
+            ("no-run-token", "scarlett", lambda token: token.clear(), "no GitHub access"),
         ]:
             root = os.path.join(scratch, label)
             shutil.copytree(base, root)
-            path = os.path.join(root, "workspaces", agent, "agent.env")
-            env = open(path, encoding="utf-8").read()
-            env = re.sub(r"(?m)^GITHUB_RUN_TOKEN_PERMISSIONS=.*$", f"GITHUB_RUN_TOKEN_PERMISSIONS={permissions}", env)
-            _write(path, env)
+
+            def first_stage_token(config, change=change):
+                rule = config["routing"]["internal"]["rules"][0]
+                change(rule["githubRunToken"])
+                if not rule["githubRunToken"]:
+                    del rule["githubRunToken"]
+
+            _mutate(root, agent, first_stage_token)
             if not any(expect in f for f in run(root, None)):
-                failures.append(f"{label}: run token permissions {permissions!r} not flagged")
+                failures.append(f"{label}: a stage rule's githubRunToken change not flagged")
         root = os.path.join(scratch, "intent")
         shutil.copytree(base, root)
         _write(os.path.join(root, "workspaces", "scarlett", "templates", "plan-review.md"), "no intent\n")
         if not any("## Intent" in f for f in run(root, None)):
             failures.append("intent: a template without `## Intent` not flagged")
-        root = os.path.join(scratch, "patch-statuses")
+        root = os.path.join(scratch, "run-token-gh")
         shutil.copytree(base, root)
-        path = os.path.join(root, "workspaces", "patch", "agent.env")
-        env = open(path, encoding="utf-8").read().replace("statuses:read", "statuses:write")
-        _write(path, env)
-        if not any("statuses:write" in f for f in run(root, None)):
-            failures.append("patch-statuses: a Patch run token that can post statuses not flagged")
+        path = os.path.join(root, "workspaces", "patch", "templates", "build.md")
+        _write(path, open(path, encoding="utf-8").read().replace(RUN_TOKEN_GH, "gh"))
+        if not any("never says to call it" in f for f in run(root, None)):
+            failures.append("run-token-gh: a stage template running plain gh not flagged")
         root = os.path.join(scratch, "patch-poster")
         shutil.copytree(base, root)
         path = os.path.join(root, "workspaces", "patch", "templates", "code-review.md")

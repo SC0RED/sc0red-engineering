@@ -15,6 +15,8 @@
 | Column | {{ column | default("") }} |
 | Attempt | {{ attempt | default(1) }} |
 
+Every `gh` command in this run is `GH_TOKEN=$("$AGENCY_BINARY" github-token) gh ...`, written that way each time. That is the run's GitHub credential: a fresh token for {{ repo | default("") }} with this stage's permissions. A plain `gh` has no credential and fails. git needs nothing: its credential helper already gets the token.
+
 `<trunk>` below is the repo's default branch: `gh repo view {{ repo | default("") }} --json defaultBranchRef -q .defaultBranchRef.name`.
 
 The owner moved this card to Ready for Development, which approved the plan on the issue. The board check claimed the card and moved it to In Development. You are Patch, and this run is the build stage.
