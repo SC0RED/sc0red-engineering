@@ -114,7 +114,7 @@ team-db: ## Create/start the team Postgres, then migrate + provision it (idempot
 # daemon to drain its runs), the staged copies renamed into place and the job
 # bootstrapped. PATH is the directories of the tools a run uses, as this shell
 # resolves them. An agent's agent.env must carry the daemon settings (PORT and
-# the rest); Scarlett's gains them with the Codex bridge.
+# the rest).
 AGENT ?=
 DAEMON_TOOLS := claude op gh git python3 uv make docker cargo node
 DAEMON_AGENT = $(if $(filter $(AGENT),$(AGENTS)),$(AGENT),$(error AGENT must be one of $(AGENTS)))
