@@ -1,0 +1,8 @@
+{
+  "AGENCY_AGENT_TOKEN": "op://Engineering/Agency team daemons/agent_token",
+  "AGENCY_INTERNAL_EVENT_TOKEN": "op://Engineering/Agency team daemons/internal_event_token",
+  "AGENCY_RUN_CLAIM_KEY": "op://Engineering/Agency team daemons/run_claim_key",
+  "AGENCY_EVENTS_DATABASE_URL": "op://Engineering/Agency team daemons/writer_database_url",
+  "BOARD_GITHUB_APP_ID": "op://Engineering/5ah4stkvogsc2e2qjuc5e4cdfm/app_id",
+  "BOARD_GITHUB_APP_PRIVATE_KEY": "op://Engineering/5ah4stkvogsc2e2qjuc5e4cdfm/rsa_key"
+}
