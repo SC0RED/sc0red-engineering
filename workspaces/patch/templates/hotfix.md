@@ -15,6 +15,8 @@
 | Column | {{ column | default("") }} |
 | Attempt | {{ attempt | default(1) }} |
 
+Every `gh` command in this run is `GH_TOKEN=$("$AGENCY_BINARY" github-token) gh ...`, written that way each time. That is the run's GitHub credential: a fresh token for {{ repo | default("") }} with this stage's permissions. A plain `gh` has no credential and fails. git needs nothing: its credential helper already gets the token.
+
 `<trunk>` below is the repo's default branch: `gh repo view {{ repo | default("") }} --json defaultBranchRef -q .defaultBranchRef.name`.
 `<production>` below is the repo's production branch as the board config (`boards.json`) names it, passed here by the board check: `{{ production_branch | default("") }}`. If that is empty, the board names no production branch for this repo: call `board_block` saying so, and stop. It tells you where to branch from and which base to open the fix against; the board tools read the same config themselves and refuse a fix against any other branch, so it is never an argument to them.
 

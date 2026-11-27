@@ -16,6 +16,8 @@
 | Attempt | {{ attempt | default(1) }} |
 | PR | #{{ pull_number | default("") }} |
 
+Every `gh` command in this run is `GH_TOKEN=$("$AGENCY_BINARY" github-token) gh ...`, written that way each time. That is the run's GitHub credential: a fresh token for {{ repo | default("") }} with this stage's permissions. A plain `gh` has no credential and fails. git needs nothing: its credential helper already gets the token.
+
 `<trunk>` below is the repo's default branch: `gh repo view {{ repo | default("") }} --json defaultBranchRef -q .defaultBranchRef.name`. `<base>` is `<pr>`'s own base (`baseRefName`), fixed when the PR was opened: `production` for a hotfix fix, `<trunk>` otherwise. This stage never changes a base, never moves a change from one branch to another, and never promotes.
 `<pr>` below is the card's pull request, #{{ pull_number | default("") }}: the board check found it as the open PR that references the issue, and dispatched this run for its current head. If the PR row above is empty on a card without a hotfix pair, the card has no open PR: find a merged one with `gh pr list --repo {{ repo | default("") }} --state merged --search "#{{ issue | default("") }}" --json number,body`, keeping only a PR whose body says `Refs #{{ issue | default("") }}` or `Fixes #{{ issue | default("") }}`. If there is one, a previous run died after merging it: that is `<pr>`, and you go to step 4. If there is none, call `board_block` saying the card has no PR, and stop.
 

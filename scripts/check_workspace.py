@@ -26,6 +26,9 @@ Neither knows what this team's design promises, so this checks that:
   that token has no Projects permission, so only the board tools move cards;
   Scarlett's has no contents write, so she cannot push, and Patch's has no
   statuses write;
+- a stage template that runs gh says to call it as
+  `GH_TOKEN=$("$AGENCY_BINARY" github-token) gh ...`: Agency gives a stage
+  run's gh no token and an empty config, so a plain gh has no credential;
 - each agent.env points AGENCY_TOOLS_ROOT, AGENCY_PYTHON_BINARY and
   AGENCY_CONTRACTS_DIR at the release scripts/sync_agency_tools.sh installs,
   so both daemons run the agency-tools and contracts the box runs;
@@ -189,6 +192,23 @@ def read_env(path):
     return values
 
 
+#: How a stage run calls gh: its claim buys the token on each call (Agency's
+#: `agency github-token`). Agency gives gh no GH_TOKEN and an empty config,
+#: so a plain `gh` there has no credential.
+RUN_TOKEN_GH = 'GH_TOKEN=$("$AGENCY_BINARY" github-token) gh'
+GH_COMMAND = re.compile(r"`gh\s")
+
+
+def check_run_token_gh(agent, ws, rule_name, template, findings):
+    """A stage template that runs gh tells the run to call it with its run token."""
+    path = os.path.join(ws, template or "")
+    if not os.path.isfile(path):
+        return
+    text = open(path, encoding="utf-8").read()
+    if GH_COMMAND.search(text) and RUN_TOKEN_GH not in text:
+        findings.append(f"{agent}/{rule_name}: {template} runs gh but never says to call it as `{RUN_TOKEN_GH} ...`")
+
+
 def check_template(agent, ws, rule_name, template, cited, findings):
     path = os.path.join(ws, template or "")
     if not template or not os.path.isfile(path):
@@ -265,6 +285,7 @@ def check_agent(agent, ws, cited, findings):
             if rule.get("preRun") or rule.get("preRunTools"):
                 findings.append(f"{agent}/{name}: stage rules take no preRun")
             check_template(agent, ws, name, rule.get("messageTemplate"), cited, findings)
+            check_run_token_gh(agent, ws, name, rule.get("messageTemplate"), findings)
 
     for (pinned_agent, pinned_stage) in ALLOWLIST:
         if pinned_agent == agent and pinned_stage not in stages:
@@ -750,6 +771,12 @@ def self_test(repo_root):
         _write(os.path.join(root, "workspaces", "scarlett", "templates", "plan-review.md"), "no intent\n")
         if not any("## Intent" in f for f in run(root, None)):
             failures.append("intent: a template without `## Intent` not flagged")
+        root = os.path.join(scratch, "run-token-gh")
+        shutil.copytree(base, root)
+        path = os.path.join(root, "workspaces", "patch", "templates", "build.md")
+        _write(path, open(path, encoding="utf-8").read().replace(RUN_TOKEN_GH, "gh"))
+        if not any("never says to call it" in f for f in run(root, None)):
+            failures.append("run-token-gh: a stage template running plain gh not flagged")
         root = os.path.join(scratch, "patch-poster")
         shutil.copytree(base, root)
         path = os.path.join(root, "workspaces", "patch", "templates", "code-review.md")
