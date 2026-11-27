@@ -45,7 +45,7 @@ Call `board_read` with `project`, `repo` and `issue`. If the card is no longer i
 
 Work in the card's worktree under `/Volumes/SSD/Code/Github/sc0red/patch-runs/`.
 
-- **CI failed:** read the Actions log (`gh run view --log-failed`), fix the cause in this PR, run a new `make` through `make-verified /Volumes/SSD/tmp/intake-lock.sh`, then a new `astra-verify --base <base> --previous <verdict>`, and push.
+- **CI failed:** read the Actions log (`gh run view --log-failed`), fix the cause in this PR, run a new `make` through `make-verified /Volumes/SSD/tmp/intake-lock.sh` (SC0RED/agency-tools' `make` needs `AGENCY_CONTRACTS_DIR`: a sparse clone of SC0RED/Agency's `development` with `contracts/` only, which your token can read), then a new `astra-verify --base <base> --previous <verdict>`, and push.
 - **Review thread open:** address it in the code, or answer it with the reason, and resolve it.
 - **Branch behind its base:** rebase onto `origin/<base>`, the PR's own base and never another branch (a hotfix fix rebases onto `origin/production` only, so no unreleased trunk change reaches production). If the rebase is mechanical, resolve it, run a new `make` and review against `<base>`, and push. If resolving it changes meaning, call `board_block` with the conflict.
 - Every push invalidates Scarlett's status. The board check sends the new head back to her, and you merge only after her status is green on that head.

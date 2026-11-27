@@ -28,7 +28,10 @@
 # sc0red-patch token on every use, with those permissions and no Projects
 # permission, so `gh project item-edit` cannot move a card. The App's id and
 # key (BOARD_GITHUB_APP_ID, BOARD_GITHUB_APP_PRIVATE_KEY in op-bindings.json)
-# never reach the run.
+# never reach the run. A stage that runs make declares `reads:`, the repos a
+# card's repo builds against (agency-tools' make needs SC0RED/Agency's
+# contracts/): git and `agency github-token --repo` get each a token of its
+# own that can only read it, so the run still writes only the card's repo.
 #
 # Concurrency (MAX_CONCURRENT_RUNS) is a daemon setting, not a workspace one;
 # it lives in agent.env beside this file.
@@ -149,6 +152,8 @@ routing:
           appIdSecret: BOARD_GITHUB_APP_ID
           appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
           permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
+          reads:
+            SC0RED/agency-tools: [SC0RED/Agency]
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 12600
         singleFlightFailClosed: true
@@ -174,6 +179,8 @@ routing:
           appIdSecret: BOARD_GITHUB_APP_ID
           appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
           permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
+          reads:
+            SC0RED/agency-tools: [SC0RED/Agency]
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 9000
         singleFlightFailClosed: true
@@ -198,6 +205,8 @@ routing:
           appIdSecret: BOARD_GITHUB_APP_ID
           appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
           permissions: contents:write,pull_requests:write,issues:write,workflows:write,actions:read,checks:read,statuses:read,metadata:read
+          reads:
+            SC0RED/agency-tools: [SC0RED/Agency]
         singleFlightKey: '{{ repo }}#{{ issue }}'
         singleFlightTtlSecs: 12600
         singleFlightFailClosed: true
