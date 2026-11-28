@@ -55,7 +55,7 @@ Call `board_read` with `project`, `repo` and `issue` for the card's fields. If t
 
 ## 2. Worktree
 
-Work in `/Volumes/SSD/Code/Github/sc0red/patch-runs/<repo-name>-{{ issue | default("") }}`: a worktree, or a clone if none exists, on branch `patch/{{ issue | default("") }}-<short-slug>` off `origin/<trunk>`. Never use `/tmp` or the boot disk. A build that needs a database gets a fresh Docker Postgres that you remove afterwards.
+Work in `/Volumes/SSD/Code/Github/sc0red/patch-runs/<repo-name>-{{ issue | default("") }}`: a worktree, or a clone if none exists, on branch `patch/{{ issue | default("") }}-<short-slug>` off `origin/<trunk>`. Never use `/tmp` or the boot disk. A build that needs a database gets a fresh Docker Postgres that you remove afterwards. SC0RED/agency-tools' `make` needs SC0RED/Agency's `contracts/` from `development`, as its CI checks it out: `git clone --depth 1 --filter=blob:none --sparse --branch development https://github.com/SC0RED/Agency /Volumes/SSD/Code/Github/sc0red/patch-runs/Agency-contracts-{{ issue | default("") }}`, then `git -C <that dir> sparse-checkout set contracts` (if that directory is already there from an earlier run, `git -C <that dir> pull --ff-only` instead), and run `make` with `AGENCY_CONTRACTS_DIR=<that dir>/contracts`. Your token can read SC0RED/Agency and cannot push to it.
 
 ## 3. Build exactly the plan
 
