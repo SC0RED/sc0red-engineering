@@ -86,6 +86,7 @@ HOTFIX_COLUMN = "Hotfix"
 # The pinned allowlist per (agent, stage). Changing a stage's authority means
 # changing this table in the same PR, where review sees it.
 ALLOWLIST = {
+    ("patch", "triage-winston"): {"read", "rate_value", "block"},
     ("patch", "plan"): {"read", "submit_plan", "propose_split", "block"},
     ("patch", "build"): {"read", "open_for_review", "block"},
     ("patch", "code-review"): {"read", "merged", "block"},
