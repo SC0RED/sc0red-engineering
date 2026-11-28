@@ -239,6 +239,8 @@ Over 20–30 completed tickets, each actor has enough data for honest calibratio
 
 Business Value is perceived client desirability and value. Product owns this score — engineers don't set it.
 
+Each project has its own Business Value guide. Winston's, with the owner rulings behind each level and the `## Business value` section triage writes into every new issue, is [`business-value-winston.md`](business-value-winston.md).
+
 |               | Description                                                                                                                                       | Examples                                                                                                                                                       |
 | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **High**      | "Must have" features — required for the product to be considered functional by clients. Must ship regardless of velocity impact.                  | Foundational features like the ability to generate Insights. Security work that blocks customer trust. Technical stories that block must-have features.        |

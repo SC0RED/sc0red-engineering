@@ -35,6 +35,7 @@
       { "repo": "SC0RED/Agency", "production_branch": "production" }
     ],
     "stages": {
+      "Triage": { "agent": "patch", "task_type": "triage-winston", "stall_minutes": 60 },
       "Planning": { "agent": "patch", "task_type": "plan", "stall_minutes": 120 },
       "Plan Review": { "agent": "scarlett", "task_type": "plan-review", "stall_minutes": 90 },
       "In Development": { "agent": "patch", "task_type": "build", "stall_minutes": 300 },

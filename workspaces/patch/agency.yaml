@@ -207,3 +207,39 @@ routing:
           - module.python: agency_tools.board.read
           - module.python: agency_tools.board.open_for_review
           - module.python: agency_tools.board.block
+
+      # New → Triage on Winston's board. Each board has its own guide (owner:
+      # "the guides will be different for each project"): the board's Triage
+      # stage in boards.json names its own task_type, whose rule and template
+      # cite that board's guide, here engineering-standards'
+      # business-value-winston.md. A board with no Triage stage (NeuroBloom,
+      # until its guide is in) leaves its New cards where they are.
+      # Propose the card's Business Value, write the reason into the issue,
+      # and leave it in Backlog. Short and cheap on purpose: Sonnet at
+      # low effort, a small turn budget and a 10-minute timeout, read-only
+      # GitHub access. The sweep dispatches Triage after every other stage,
+      # so with one Patch slot per board a plan or build waits behind at most
+      # one triage run.
+      - name: triage-winston
+        condition:
+          equals: { field: taskType, value: triage-winston }
+        messageTemplate: templates/triage-winston.md
+        deliverable: action
+        risk: low
+        model: claude-sonnet-5-5
+        effort: low
+        maxTurns: 15
+        runTimeoutSecs: 600
+        githubRunToken:
+          appIdSecret: BOARD_GITHUB_APP_ID
+          appKeySecret: BOARD_GITHUB_APP_PRIVATE_KEY
+          permissions: contents:read,issues:read,metadata:read
+        singleFlightKey: '{{ repo }}#{{ issue }}'
+        singleFlightTtlSecs: 2400
+        singleFlightFailClosed: true
+        identity:
+          soul: false
+        tools:
+          - module.python: agency_tools.board.read
+          - module.python: agency_tools.board.rate_value
+          - module.python: agency_tools.board.block

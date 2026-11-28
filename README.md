@@ -11,12 +11,19 @@ The board is the state. Every two minutes, Patch's `board-check` schedule rule r
 
 | Column | Agent | Stage (taskType) | Ends with |
 |---|---|---|---|
+| New → Triage | Patch | `triage-<board>` | `board.rate_value` (the issue's `## Business value` section and the Business Value field, per that board's guide; → Backlog), or `board.block` |
 | Plan → Planning | Patch | `plan` | `board.submit_plan` (→ Plan Review), `board.propose_split`, or `board.block` |
 | Plan Review | Scarlett | `plan-review` | `board.post_verdict` (approve stays for the owner) |
 | Ready for Development → In Development | Patch | `build` | `board.open_for_review` (→ Code Review) |
 | Code Review | Scarlett | `code-review` | read-only review (diff, Astra, GitHub CI; she never runs the PR's code), then `scarlett/review/<base>` posted by `scarlett.post_review` (the gate's `scarlett-review`; only Scarlett's code-review stage holds it), or `board.block` with the findings |
 | Code Review | Patch | `code-review` | merge through the gate once Scarlett's status is on the head, deploy watched, then `board.merged` |
 | Hotfix | Patch | `hotfix` | two PRs (production fix and trunk back-merge), then `board.open_for_review`; the card moves on only when both have merged |
+
+Rollout order for Triage: the agency-tools release with `board.rate_value` and the Triage column must be synced into `current` (`make sync-tools`) before this workspace is installed. An older release refuses the `Triage` stage in `boards.json` and the whole sweep stops, planning and builds included. Bare `make`'s `tool-refs` check, run against the synced release, fails until then.
+
+Each board rates with its own guide. A board's `Triage` stage in `boards.json` names its own task type, whose rule and template cite that board's guide: Winston's is `triage-winston`, citing engineering-standards `shared/business-value-winston.md`. A board with no `Triage` stage leaves its New cards in New, unrated; NeuroBloom has none until its own guide is in.
+
+Triage is the cheap stage: Sonnet at low effort, 15 turns, a 10-minute timeout and a read-only run token. The sweep dispatches it after every other stage, so with Patch's one slot per board a plan or build waits behind at most one triage run. A rating is a proposal: the owner changes the Business Value field on the board, and a level already there stands (`board.rate_value` refuses a different one).
 
 The owner's gate is the plan: he moves a card from Plan Review to Ready for Development himself, and no agent tool can make that move. PRs have no per-PR human approval; they merge when the gate's and GitHub's rules are met, and Scarlett's status stands for green CI (which runs bare `make`) and her Astra "merge" on that head. Only Scarlett posts it; the gate's merge checks that GitHub shows it.
 
